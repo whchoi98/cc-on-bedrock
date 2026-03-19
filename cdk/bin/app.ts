@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { defaultConfig } from '../config/default';
 import { NetworkStack } from '../lib/01-network-stack';
 import { SecurityStack } from '../lib/02-security-stack';
+import { LitellmStack } from '../lib/03-litellm-stack';
 
 const app = new cdk.App();
 
@@ -39,5 +40,18 @@ const securityStack = new SecurityStack(app, 'CcOnBedrock-Security', {
   description: 'CC-on-Bedrock: Cognito, ACM, KMS, Secrets Manager, IAM',
 });
 securityStack.addDependency(networkStack);
+
+// Stack 03: LiteLLM
+const litellmStack = new LitellmStack(app, 'CcOnBedrock-LiteLLM', {
+  env, config,
+  vpc: networkStack.vpc,
+  encryptionKey: securityStack.encryptionKey,
+  litellmEc2Role: securityStack.litellmEc2Role,
+  litellmMasterKeySecret: securityStack.litellmMasterKeySecret,
+  rdsCredentialsSecret: securityStack.rdsCredentialsSecret,
+  valkeyAuthSecret: securityStack.valkeyAuthSecret,
+  description: 'CC-on-Bedrock: LiteLLM Proxy, RDS, Serverless Valkey',
+});
+litellmStack.addDependency(securityStack);
 
 console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));
