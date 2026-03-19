@@ -1,0 +1,41 @@
+FROM amazonlinux:2023
+
+LABEL maintainer="cc-on-bedrock"
+LABEL description="CC-on-Bedrock Development Environment (Amazon Linux 2023 ARM64)"
+
+ARG TARGETARCH=arm64
+
+# Copy scripts and config
+COPY scripts/ /opt/devenv/scripts/
+COPY config/ /opt/devenv/config/
+RUN chmod +x /opt/devenv/scripts/*.sh
+
+# Run common setup (Node.js, Python, AWS CLI, code-server, etc.)
+RUN /opt/devenv/scripts/setup-common.sh
+
+# Install Claude Code + plugins
+RUN /opt/devenv/scripts/setup-claude-code.sh
+
+# Install Kiro CLI
+RUN /opt/devenv/scripts/setup-kiro.sh
+
+# Pre-install approved extensions
+RUN while IFS= read -r ext || [ -n "$ext" ]; do \
+      ext=$(echo "$ext" | sed 's/#.*//;s/^[[:space:]]*//;s/[[:space:]]*$//'); \
+      [ -z "$ext" ] && continue; \
+      sudo -u coder code-server --install-extension "$ext" 2>/dev/null || \
+        echo "WARN: Could not install extension $ext"; \
+    done < /opt/devenv/config/extensions.txt
+
+# Copy approved extensions for restricted/locked modes
+RUN cp -r /home/coder/.local/share/code-server/extensions /opt/extensions-approved 2>/dev/null || true \
+    && cp -r /home/coder/.local/share/code-server/extensions /opt/extensions-readonly 2>/dev/null || true
+
+# Expose code-server port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD curl -f http://localhost:8080/healthz || exit 1
+
+ENTRYPOINT ["/opt/devenv/scripts/entrypoint.sh"]
