@@ -5,6 +5,7 @@ import { NetworkStack } from '../lib/01-network-stack';
 import { SecurityStack } from '../lib/02-security-stack';
 import { LitellmStack } from '../lib/03-litellm-stack';
 import { EcsDevenvStack } from '../lib/04-ecs-devenv-stack';
+import { DashboardStack } from '../lib/05-dashboard-stack';
 
 const app = new cdk.App();
 
@@ -69,5 +70,21 @@ const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
 });
 ecsDevenvStack.addDependency(litellmStack);
+
+// Stack 05: Dashboard
+const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
+  env, config,
+  vpc: networkStack.vpc,
+  encryptionKey: securityStack.encryptionKey,
+  dashboardEc2Role: securityStack.dashboardEc2Role,
+  dashboardCertificate: securityStack.dashboardCertificate,
+  hostedZone: networkStack.hostedZone,
+  cloudfrontSecret: securityStack.cloudfrontSecret,
+  userPool: securityStack.userPool,
+  userPoolClient: securityStack.userPoolClient,
+  litellmAlbDns: litellmStack.internalAlb.loadBalancerDnsName,
+  description: 'CC-on-Bedrock: Next.js Dashboard, ALB, CloudFront',
+});
+dashboardStack.addDependency(ecsDevenvStack);
 
 console.log('CC-on-Bedrock CDK App initialized with config:', JSON.stringify(config, null, 2));
