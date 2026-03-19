@@ -1,0 +1,13 @@
+# Pre-approved VSCode extensions for CC-on-Bedrock devenv
+# One extension ID per line
+Anthropic.claude-code
+ms-python.python
+ms-python.vscode-pylance
+dbaeumer.vscode-eslint
+esbenp.prettier-vscode
+eamodio.gitlens
+hashicorp.terraform
+amazonwebservices.aws-toolkit-vscode
+redhat.vscode-yaml
+ms-azuretools.vscode-docker
+bradlc.vscode-tailwindcss
