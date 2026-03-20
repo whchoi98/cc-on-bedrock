@@ -1,14 +1,15 @@
-FROM ghcr.io/berriai/litellm:main
+FROM python:3.11-slim
 
 LABEL maintainer="cc-on-bedrock"
-LABEL description="CC-on-Bedrock LiteLLM Proxy with Bedrock integration"
+LABEL description="CC-on-Bedrock LiteLLM Proxy with Bedrock integration (ARM64 native)"
 
-USER root
-
-# Install envsubst (gettext) and jq for config templating + secret parsing
+# Install system dependencies
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends gettext-base jq curl unzip && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install LiteLLM
+RUN pip install --no-cache-dir 'litellm[proxy]'
 
 # Install AWS CLI v2 for Secrets Manager access
 RUN ARCH=$(uname -m) && \

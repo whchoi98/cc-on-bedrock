@@ -29,8 +29,9 @@ install_packages() {
       ;;
     amzn)
       dnf update -y -q
+      # Note: curl-minimal is pre-installed on AL2023, don't install curl (conflicts)
       dnf install -y -q \
-        curl wget git jq unzip tar gzip ca-certificates \
+        wget git jq unzip tar gzip ca-certificates \
         gcc gcc-c++ make python3 python3-pip \
         openssh-clients sudo
       ;;
@@ -50,22 +51,19 @@ create_user() {
   fi
 }
 
-# --- Node.js 20 via fnm ---
+# --- Node.js 20 via binary download (Docker-friendly, no shell detection needed) ---
 install_nodejs() {
-  echo "Installing Node.js 20 via fnm..."
-  curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir /usr/local/bin --skip-shell
-  export PATH="/usr/local/bin:$PATH"
-  eval "$(fnm env)"
-  fnm install 20
-  fnm default 20
-
-  # Make node/npm globally available
-  NODE_PATH=$(fnm exec --using=20 which node)
-  NODE_DIR=$(dirname "$NODE_PATH")
-  ln -sf "$NODE_DIR/node" /usr/local/bin/node
-  ln -sf "$NODE_DIR/npm" /usr/local/bin/npm
-  ln -sf "$NODE_DIR/npx" /usr/local/bin/npx
-
+  echo "Installing Node.js 20..."
+  ARCH=$(uname -m)
+  if [ "$ARCH" = "aarch64" ]; then
+    NODE_ARCH="arm64"
+  else
+    NODE_ARCH="x64"
+  fi
+  NODE_VERSION="v20.18.3"
+  curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz
+  tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1
+  rm /tmp/node.tar.gz
   echo "Node.js $(node --version) installed"
 }
 
