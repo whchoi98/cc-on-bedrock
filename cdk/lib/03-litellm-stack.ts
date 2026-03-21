@@ -79,7 +79,7 @@ export class LitellmStack extends cdk.Stack {
       description: 'Serverless Valkey SG',
       allowAllOutbound: false,
     });
-    valkeySg.addIngressRule(ec2Sg, ec2.Port.tcp(6380), 'Allow from LiteLLM EC2');
+    valkeySg.addIngressRule(ec2Sg, ec2.Port.tcp(6379), 'Allow from LiteLLM EC2');
 
     // Internal ALB
     this.internalAlb = new elbv2.ApplicationLoadBalancer(this, 'LitellmAlb', {

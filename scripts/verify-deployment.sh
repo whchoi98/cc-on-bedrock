@@ -18,7 +18,7 @@ fi
 DOMAIN="$1"
 shift
 REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
-STACK_PREFIX="cc-on-bedrock"
+STACK_PREFIX="CcOnBedrock"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,18 +78,29 @@ echo ""
 # ===========================================================================
 echo "[CloudFront Distributions]"
 
-check "Dashboard CloudFront (dashboard.${DOMAIN})"
-DASHBOARD_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://dashboard.${DOMAIN}" 2>/dev/null || echo "000")
-if [[ "$DASHBOARD_HTTP" =~ ^(200|301|302|401|403)$ ]]; then
-  pass "HTTP $DASHBOARD_HTTP"
-else
-  fail "HTTP $DASHBOARD_HTTP - expected 200/301/302/401/403"
+# Get Dashboard URL from stack output (handles custom domain prefixes)
+DASHBOARD_URL=$(get_cfn_output "${STACK_PREFIX}-Dashboard" "DashboardUrl")
+DASHBOARD_CF=$(get_cfn_output "${STACK_PREFIX}-Dashboard" "CloudFrontDomain")
+if [[ -z "$DASHBOARD_URL" || "$DASHBOARD_URL" == "None" ]]; then
+  DASHBOARD_URL="https://dashboard.${DOMAIN}"
 fi
 
-check "Dev Env CloudFront (*.dev.${DOMAIN}) - wildcard DNS"
-DEV_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://test.dev.${DOMAIN}" 2>/dev/null || echo "000")
-if [[ "$DEV_HTTP" =~ ^(200|301|302|401|403|502|503)$ ]]; then
-  pass "HTTP $DEV_HTTP (response received - DNS and CloudFront working)"
+check "Dashboard CloudFront (${DASHBOARD_CF:-direct})"
+DASHBOARD_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://${DASHBOARD_CF:-dashboard.${DOMAIN}}" 2>/dev/null || echo "000")
+if [[ "$DASHBOARD_HTTP" =~ ^(200|301|302|307|401|403)$ ]]; then
+  pass "HTTP $DASHBOARD_HTTP"
+elif [[ "$DASHBOARD_HTTP" == "000" ]]; then
+  warn "connection failed - CloudFront may not be reachable"
+else
+  fail "HTTP $DASHBOARD_HTTP - expected 200/301/302/307/401/403"
+fi
+
+# Get DevEnv CloudFront
+DEVENV_CF=$(get_cfn_output "${STACK_PREFIX}-EcsDevenv" "CloudFrontDomain")
+check "Dev Env CloudFront (${DEVENV_CF:-*.dev.${DOMAIN}})"
+DEV_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://${DEVENV_CF:-test.dev.${DOMAIN}}" 2>/dev/null || echo "000")
+if [[ "$DEV_HTTP" =~ ^(200|301|302|307|401|403|502|503|504)$ ]]; then
+  pass "HTTP $DEV_HTTP (CloudFront reachable - 502/503/504 expected if no ECS tasks running)"
 elif [[ "$DEV_HTTP" == "000" ]]; then
   warn "connection failed - DNS may not be propagated yet"
 else
@@ -104,7 +115,7 @@ echo ""
 echo "[Dashboard Health]"
 
 check "Dashboard health endpoint (/api/health)"
-HEALTH_RESPONSE=$(curl -sf --max-time 10 "https://dashboard.${DOMAIN}/api/health" 2>/dev/null || echo "")
+HEALTH_RESPONSE=$(curl -sf --max-time 10 "https://${DASHBOARD_CF:-dashboard.${DOMAIN}}/api/health" 2>/dev/null || echo "")
 if [[ -n "$HEALTH_RESPONSE" ]]; then
   STATUS=$(echo "$HEALTH_RESPONSE" | jq -r '.status // empty' 2>/dev/null || echo "")
   if [[ "$STATUS" == "ok" || "$STATUS" == "healthy" ]]; then
@@ -126,11 +137,11 @@ echo ""
 echo "[Cognito]"
 
 check "Cognito User Pool exists"
-USER_POOL_ID=$(get_cfn_output "${STACK_PREFIX}-security" "UserPoolId")
+USER_POOL_ID=$(get_cfn_output "${STACK_PREFIX}-Security" "UserPoolId")
 if [[ -z "$USER_POOL_ID" || "$USER_POOL_ID" == "None" ]]; then
   # Try describing user pools directly
   USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 10 --region "$REGION" \
-    --query "UserPools[?contains(Name, 'cc-on-bedrock')].Id" --output text 2>/dev/null || echo "")
+    --query "UserPools[?contains(Name, 'cc-on-bedrock')].Id | [0]" --output text 2>/dev/null || echo "")
 fi
 if [[ -n "$USER_POOL_ID" && "$USER_POOL_ID" != "None" ]]; then
   POOL_STATUS=$(aws cognito-idp describe-user-pool --user-pool-id "$USER_POOL_ID" --region "$REGION" \
@@ -165,26 +176,33 @@ echo ""
 echo "[ECS Cluster]"
 
 check "ECS cluster exists and is ACTIVE"
-CLUSTER_NAME=$(get_cfn_output "${STACK_PREFIX}-ecs-devenv" "ClusterName")
+CLUSTER_NAME=$(get_cfn_output "${STACK_PREFIX}-EcsDevenv" "ClusterName")
 if [[ -z "$CLUSTER_NAME" || "$CLUSTER_NAME" == "None" ]]; then
-  CLUSTER_NAME="cc-on-bedrock"
+  # Fallback: search by known name
+  CLUSTER_NAME="cc-on-bedrock-devenv"
 fi
-CLUSTER_STATUS=$(aws ecs describe-clusters --clusters "$CLUSTER_NAME" --region "$REGION" \
-  --query "clusters[0].status" --output text 2>/dev/null || echo "NOT_FOUND")
+CLUSTER_INFO=$(aws ecs describe-clusters --clusters "$CLUSTER_NAME" --region "$REGION" \
+  --query "clusters[0].{Status:status,Instances:registeredContainerInstancesCount,Running:runningTasksCount}" \
+  --output json 2>/dev/null || echo "{}")
+CLUSTER_STATUS=$(echo "$CLUSTER_INFO" | jq -r '.Status // "NOT_FOUND"')
+CLUSTER_INSTANCES=$(echo "$CLUSTER_INFO" | jq -r '.Instances // 0')
 if [[ "$CLUSTER_STATUS" == "ACTIVE" ]]; then
-  pass "cluster=$CLUSTER_NAME"
+  pass "cluster=$CLUSTER_NAME instances=$CLUSTER_INSTANCES"
 else
   fail "cluster=$CLUSTER_NAME status=$CLUSTER_STATUS"
 fi
 
 check "ECS task definitions registered"
-TASK_DEFS=$(aws ecs list-task-definitions --family-prefix devenv --region "$REGION" \
-  --query "taskDefinitionArns" --output text 2>/dev/null || echo "")
-if [[ -n "$TASK_DEFS" ]]; then
-  COUNT=$(echo "$TASK_DEFS" | wc -w)
-  pass "$COUNT task definition(s) found"
+TASK_DEF_COUNT=0
+for PREFIX in devenv-ubuntu-light devenv-ubuntu-standard devenv-ubuntu-power devenv-al2023-light devenv-al2023-standard devenv-al2023-power; do
+  TD=$(aws ecs list-task-definitions --family-prefix "$PREFIX" --region "$REGION" \
+    --query "length(taskDefinitionArns)" --output text 2>/dev/null || echo "0")
+  TASK_DEF_COUNT=$((TASK_DEF_COUNT + TD))
+done
+if [[ "$TASK_DEF_COUNT" -gt 0 ]]; then
+  pass "$TASK_DEF_COUNT task definition(s) across 6 families"
 else
-  warn "no task definitions found with prefix 'devenv'"
+  warn "no task definitions found"
 fi
 
 echo ""
@@ -215,16 +233,16 @@ echo "[EFS]"
 
 check "EFS file system exists"
 EFS_IDS=$(aws efs describe-file-systems --region "$REGION" \
-  --query "FileSystems[?contains(Name, 'cc-on-bedrock') || contains(Name, 'devenv')].FileSystemId" \
+  --query "FileSystems[?contains(Name, 'cc-on-bedrock') || contains(Name, 'CcOnBedrock') || contains(Name, 'devenv') || contains(Name, 'Devenv')].FileSystemId" \
   --output text 2>/dev/null || echo "")
 if [[ -n "$EFS_IDS" ]]; then
   pass "IDs: $EFS_IDS"
 else
-  # Try by tag
+  # Fallback: check all EFS and look for tags
   EFS_IDS=$(aws efs describe-file-systems --region "$REGION" \
     --query "FileSystems[].FileSystemId" --output text 2>/dev/null || echo "")
   if [[ -n "$EFS_IDS" ]]; then
-    warn "found EFS file systems but could not confirm cc-on-bedrock by name"
+    warn "found EFS ($EFS_IDS) but could not confirm by name"
   else
     fail "no EFS file systems found"
   fi
@@ -275,7 +293,7 @@ echo "[LiteLLM Proxy]"
 
 check "LiteLLM ASG instances running"
 LITELLM_ASG=$(aws autoscaling describe-auto-scaling-groups --region "$REGION" \
-  --query "AutoScalingGroups[?contains(AutoScalingGroupName, 'litellm') || contains(AutoScalingGroupName, 'LiteLLM')].{Name:AutoScalingGroupName,Desired:DesiredCapacity,Running:length(Instances[?LifecycleState=='InService'])}" \
+  --query "AutoScalingGroups[?contains(AutoScalingGroupName, 'Litellm') || contains(AutoScalingGroupName, 'LiteLLM') || contains(AutoScalingGroupName, 'litellm')].{Name:AutoScalingGroupName,Desired:DesiredCapacity,Running:length(Instances[?LifecycleState=='InService'])}" \
   --output json 2>/dev/null || echo "[]")
 if [[ "$LITELLM_ASG" != "[]" ]]; then
   RUNNING=$(echo "$LITELLM_ASG" | jq -r '.[0].Running // 0')
@@ -290,13 +308,13 @@ else
 fi
 
 check "LiteLLM Internal ALB health"
-LITELLM_ALB_DNS=$(get_cfn_output "${STACK_PREFIX}-litellm" "InternalAlbDns")
+LITELLM_ALB_DNS=$(get_cfn_output "${STACK_PREFIX}-LiteLLM" "InternalAlbDns")
 if [[ -n "$LITELLM_ALB_DNS" && "$LITELLM_ALB_DNS" != "None" ]]; then
   # Internal ALB - check target health via AWS API
   LITELLM_TG=$(aws elbv2 describe-target-groups --region "$REGION" \
-    --query "TargetGroups[?contains(TargetGroupName, 'litellm') || contains(TargetGroupName, 'LiteLLM')].TargetGroupArn" \
+    --query "TargetGroups[?contains(TargetGroupName, 'Litel') || contains(TargetGroupName, 'litel')].TargetGroupArn | [0]" \
     --output text 2>/dev/null || echo "")
-  if [[ -n "$LITELLM_TG" ]]; then
+  if [[ -n "$LITELLM_TG" && "$LITELLM_TG" != "None" ]]; then
     HEALTHY=$(aws elbv2 describe-target-health --target-group-arn "$LITELLM_TG" --region "$REGION" \
       --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text 2>/dev/null || echo "0")
     TOTAL_TARGETS=$(aws elbv2 describe-target-health --target-group-arn "$LITELLM_TG" --region "$REGION" \
@@ -313,10 +331,101 @@ else
   warn "ALB DNS not available from stack outputs"
 fi
 
+check "LiteLLM readiness (cache + db)"
+if [[ -n "$LITELLM_ASG" && "$LITELLM_ASG" != "[]" ]]; then
+  LITELLM_INSTANCE=$(echo "$LITELLM_ASG" | jq -r '.[0].Name' | xargs -I{} aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names {} --region "$REGION" --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService'].InstanceId | [0]" --output text 2>/dev/null || echo "")
+  if [[ -n "$LITELLM_INSTANCE" && "$LITELLM_INSTANCE" != "None" ]]; then
+    CMD_ID=$(aws ssm send-command --instance-ids "$LITELLM_INSTANCE" --document-name "AWS-RunShellScript" \
+      --parameters '{"commands":["curl -sf http://localhost:4000/health/readiness 2>/dev/null || echo FAILED"]}' \
+      --region "$REGION" --output text --query 'Command.CommandId' 2>/dev/null || echo "")
+    if [[ -n "$CMD_ID" ]]; then
+      sleep 5
+      READINESS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$LITELLM_INSTANCE" \
+        --region "$REGION" --query 'StandardOutputContent' --output text 2>/dev/null || echo "FAILED")
+      CACHE_STATUS=$(echo "$READINESS" | jq -r '.cache // "none"' 2>/dev/null || echo "unknown")
+      DB_STATUS=$(echo "$READINESS" | jq -r '.db // "unknown"' 2>/dev/null || echo "unknown")
+      if [[ "$CACHE_STATUS" == "redis" && "$DB_STATUS" == "connected" ]]; then
+        pass "cache=$CACHE_STATUS db=$DB_STATUS"
+      elif [[ "$DB_STATUS" == "connected" ]]; then
+        warn "db=$DB_STATUS cache=$CACHE_STATUS"
+      else
+        fail "db=$DB_STATUS cache=$CACHE_STATUS"
+      fi
+    else
+      warn "SSM command failed"
+    fi
+  else
+    warn "no LiteLLM instance found for readiness check"
+  fi
+else
+  warn "skipped (no ASG)"
+fi
+
 echo ""
 
 # ===========================================================================
-# 9. Secrets Manager
+# 9. Valkey Cache
+# ===========================================================================
+echo "[Valkey Cache]"
+
+check "Serverless Valkey cache exists"
+VALKEY_STATUS=$(aws elasticache describe-serverless-caches --serverless-cache-name cc-on-bedrock-valkey --region "$REGION" \
+  --query "ServerlessCaches[0].Status" --output text 2>/dev/null || echo "NOT_FOUND")
+if [[ "$VALKEY_STATUS" == "available" ]]; then
+  VALKEY_ENDPOINT=$(aws elasticache describe-serverless-caches --serverless-cache-name cc-on-bedrock-valkey --region "$REGION" \
+    --query "ServerlessCaches[0].Endpoint.Address" --output text 2>/dev/null || echo "")
+  pass "status=$VALKEY_STATUS endpoint=$VALKEY_ENDPOINT"
+elif [[ "$VALKEY_STATUS" == "creating" ]]; then
+  warn "status=$VALKEY_STATUS (still provisioning)"
+else
+  fail "status=$VALKEY_STATUS"
+fi
+
+echo ""
+
+# ===========================================================================
+# 10. Dashboard ASG
+# ===========================================================================
+echo "[Dashboard]"
+
+check "Dashboard ASG instances running"
+DASHBOARD_ASG=$(aws autoscaling describe-auto-scaling-groups --region "$REGION" \
+  --query "AutoScalingGroups[?contains(AutoScalingGroupName, 'Dashboard') || contains(AutoScalingGroupName, 'dashboard')].{Name:AutoScalingGroupName,Desired:DesiredCapacity,Running:length(Instances[?LifecycleState=='InService'])}" \
+  --output json 2>/dev/null || echo "[]")
+if [[ "$DASHBOARD_ASG" != "[]" ]]; then
+  RUNNING=$(echo "$DASHBOARD_ASG" | jq -r '.[0].Running // 0')
+  DESIRED=$(echo "$DASHBOARD_ASG" | jq -r '.[0].Desired // 0')
+  if [[ "$RUNNING" -gt 0 ]]; then
+    pass "$RUNNING/$DESIRED instances InService"
+  else
+    fail "0/$DESIRED instances InService"
+  fi
+else
+  warn "Dashboard ASG not found"
+fi
+
+check "Dashboard ALB target health"
+DASHBOARD_TG=$(aws elbv2 describe-target-groups --region "$REGION" \
+  --query "TargetGroups[?contains(TargetGroupName, 'CcOnBe-Dashb') || contains(TargetGroupName, 'dashboard')].TargetGroupArn | [0]" \
+  --output text 2>/dev/null || echo "")
+if [[ -n "$DASHBOARD_TG" && "$DASHBOARD_TG" != "None" ]]; then
+  HEALTHY=$(aws elbv2 describe-target-health --target-group-arn "$DASHBOARD_TG" --region "$REGION" \
+    --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" --output text 2>/dev/null || echo "0")
+  TOTAL_TARGETS=$(aws elbv2 describe-target-health --target-group-arn "$DASHBOARD_TG" --region "$REGION" \
+    --query "length(TargetHealthDescriptions)" --output text 2>/dev/null || echo "0")
+  if [[ "$HEALTHY" -gt 0 ]]; then
+    pass "$HEALTHY/$TOTAL_TARGETS targets healthy"
+  else
+    fail "0/$TOTAL_TARGETS targets healthy"
+  fi
+else
+  warn "Dashboard target group not found"
+fi
+
+echo ""
+
+# ===========================================================================
+# 11. Secrets Manager
 # ===========================================================================
 echo "[Secrets Manager]"
 

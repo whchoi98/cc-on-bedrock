@@ -8,9 +8,16 @@ model_list:
       model: "bedrock/global.anthropic.claude-sonnet-4-6[1m]"
       aws_region_name: "ap-northeast-2"
 
+router_settings:
+  redis_url: "rediss://${REDIS_HOST}:6379"
+
 general_settings:
   master_key: "${LITELLM_MASTER_KEY}"
   database_url: "${DATABASE_URL}"
 
 litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    url: "rediss://${REDIS_HOST}:6379"
   drop_params: true
