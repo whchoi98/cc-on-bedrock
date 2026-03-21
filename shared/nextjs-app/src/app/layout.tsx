@@ -19,11 +19,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.className} bg-[#0d1117]`}>
+      <body className={`${inter.className} bg-[#0a0f1a]`}>
         <Providers>
           <div className="flex min-h-screen">
             <Sidebar />
-            <main className="flex-1 overflow-y-auto bg-[#0d1117]">
+            <main className="flex-1 overflow-y-auto bg-[#0a0f1a]">
               <div className="p-6 lg:p-8">{children}</div>
             </main>
           </div>

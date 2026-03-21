@@ -10,7 +10,7 @@ export default withAuth(
     if (path.startsWith("/admin") || path.startsWith("/monitoring")) {
       const groups = (token?.groups as string[]) ?? [];
       if (!groups.includes("admin")) {
-        return NextResponse.redirect(new URL("/analytics", req.url));
+        return NextResponse.redirect(new URL("/", req.url));
       }
     }
 

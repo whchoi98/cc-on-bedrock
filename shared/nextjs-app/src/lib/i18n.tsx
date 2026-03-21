@@ -53,6 +53,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 // ─── Korean ───
 const ko: Record<string, string> = {
   // Sidebar
+  "nav.home": "홈",
   "nav.analytics": "분석",
   "nav.monitoring": "모니터링",
   "nav.users": "사용자",
@@ -188,6 +189,24 @@ const ko: Record<string, string> = {
   "containers.startContainer": "컨테이너 시작",
   "containers.cancel": "취소",
 
+  // Home
+  "home.title": "CC-on-Bedrock",
+  "home.subtitle": "AWS Bedrock 기반 멀티유저 Claude Code 개발환경",
+  "home.totalCost": "총 비용",
+  "home.totalRequests": "총 요청",
+  "home.activeUsers": "활성 사용자",
+  "home.runningContainers": "실행 컨테이너",
+  "home.proxyStatus": "프록시 상태",
+  "home.cacheStatus": "캐시 상태",
+  "home.dbStatus": "DB 상태",
+  "home.modelCount": "등록 모델",
+  "home.quickActions": "빠른 작업",
+  "home.viewAnalytics": "분석 대시보드",
+  "home.viewMonitoring": "모니터링",
+  "home.manageUsers": "사용자 관리",
+  "home.manageContainers": "컨테이너 관리",
+  "home.recentActivity": "최근 활동",
+
   // Common
   "common.refresh": "새로고침",
   "common.active": "활성",
@@ -199,6 +218,7 @@ const ko: Record<string, string> = {
 // ─── English ───
 const en: Record<string, string> = {
   // Sidebar
+  "nav.home": "Home",
   "nav.analytics": "Analytics",
   "nav.monitoring": "Monitoring",
   "nav.users": "Users",
@@ -333,6 +353,24 @@ const en: Record<string, string> = {
   "containers.byTier": "By Tier",
   "containers.startContainer": "Start Container",
   "containers.cancel": "Cancel",
+
+  // Home
+  "home.title": "CC-on-Bedrock",
+  "home.subtitle": "Multi-user Claude Code Dev Environment on AWS Bedrock",
+  "home.totalCost": "Total Cost",
+  "home.totalRequests": "Total Requests",
+  "home.activeUsers": "Active Users",
+  "home.runningContainers": "Running Containers",
+  "home.proxyStatus": "Proxy Status",
+  "home.cacheStatus": "Cache Status",
+  "home.dbStatus": "DB Status",
+  "home.modelCount": "Models",
+  "home.quickActions": "Quick Actions",
+  "home.viewAnalytics": "Analytics Dashboard",
+  "home.viewMonitoring": "Monitoring",
+  "home.manageUsers": "User Management",
+  "home.manageContainers": "Container Management",
+  "home.recentActivity": "Recent Activity",
 
   // Common
   "common.refresh": "Refresh",

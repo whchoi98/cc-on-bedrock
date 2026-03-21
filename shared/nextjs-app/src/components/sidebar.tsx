@@ -13,6 +13,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  { href: "/", labelKey: "nav.home", icon: "home" },
   { href: "/analytics", labelKey: "nav.analytics", icon: "chart-bar" },
   { href: "/monitoring", labelKey: "nav.monitoring", icon: "activity", adminOnly: true },
   { href: "/admin", labelKey: "nav.users", icon: "users", adminOnly: true },
@@ -21,6 +22,13 @@ const navItems: NavItem[] = [
 
 function NavIcon({ icon }: { icon: string }) {
   switch (icon) {
+    case "home":
+      return (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+        </svg>
+      );
     case "chart-bar":
       return (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -66,22 +74,47 @@ export default function Sidebar() {
 
   return (
     <aside className="flex flex-col w-60 min-h-screen bg-[#161b22] border-r border-gray-800">
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-gray-800">
-        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 text-white font-bold text-sm">
-          CC
+      {/* Logo + Language Toggle */}
+      <div className="px-5 pt-5 pb-3 border-b border-gray-800">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 text-white font-bold text-sm">
+            CC
+          </div>
+          <div>
+            <h1 className="text-sm font-semibold text-gray-100">CC-on-Bedrock</h1>
+            <p className="text-[10px] text-gray-500">Dashboard</p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-sm font-semibold text-gray-100">CC-on-Bedrock</h1>
-          <p className="text-[10px] text-gray-500">Dashboard</p>
+        <div className="flex items-center bg-[#0d1117] rounded-lg border border-gray-800 p-0.5">
+          <button
+            onClick={() => setLocale("ko")}
+            className={`flex-1 px-3 py-1 text-[10px] font-medium rounded-md transition-colors ${
+              locale === "ko"
+                ? "bg-blue-600 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            한국어
+          </button>
+          <button
+            onClick={() => setLocale("en")}
+            className={`flex-1 px-3 py-1 text-[10px] font-medium rounded-md transition-colors ${
+              locale === "en"
+                ? "bg-blue-600 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            English
+          </button>
         </div>
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
         {filteredItems.map((item) => {
-          const isActive =
-            pathname === item.href || pathname.startsWith(item.href + "/");
+          const isActive = item.href === "/"
+            ? pathname === "/"
+            : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}
@@ -98,32 +131,6 @@ export default function Sidebar() {
           );
         })}
       </nav>
-
-      {/* Language Toggle */}
-      <div className="px-4 py-2">
-        <div className="flex items-center bg-[#0d1117] rounded-lg border border-gray-800 p-0.5">
-          <button
-            onClick={() => setLocale("ko")}
-            className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-              locale === "ko"
-                ? "bg-blue-600 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
-          >
-            한국어
-          </button>
-          <button
-            onClick={() => setLocale("en")}
-            className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-              locale === "en"
-                ? "bg-blue-600 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
-          >
-            English
-          </button>
-        </div>
-      </div>
 
       {/* User info */}
       <div className="px-4 py-4 border-t border-gray-800">

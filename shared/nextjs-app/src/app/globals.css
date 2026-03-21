@@ -27,7 +27,7 @@
     @apply border-border;
   }
   body {
-    @apply bg-[#0d1117] text-gray-200;
+    @apply bg-[#0a0f1a] text-gray-200;
   }
 }
 
