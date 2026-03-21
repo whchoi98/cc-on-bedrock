@@ -3,13 +3,16 @@ FROM python:3.11-slim
 LABEL maintainer="cc-on-bedrock"
 LABEL description="CC-on-Bedrock LiteLLM Proxy with Bedrock integration (ARM64 native)"
 
-# Install system dependencies
+# Install system dependencies + Node.js (required for Prisma CLI)
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends gettext-base jq curl unzip && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install LiteLLM
-RUN pip install --no-cache-dir 'litellm[proxy]'
+# Install LiteLLM with Prisma and generate Prisma client
+RUN pip install --no-cache-dir 'litellm[proxy]' prisma && \
+    prisma generate --schema=/usr/local/lib/python3.11/site-packages/litellm/proxy/schema.prisma
 
 # Install AWS CLI v2 for Secrets Manager access
 RUN ARCH=$(uname -m) && \

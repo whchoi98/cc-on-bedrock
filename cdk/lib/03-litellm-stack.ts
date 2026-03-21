@@ -141,8 +141,9 @@ yum install -y docker jq
 systemctl start docker
 systemctl enable docker
 
-# Login to ECR
-REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+# Login to ECR (IMDSv2)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
@@ -156,7 +157,7 @@ docker run -d --restart always \\
   -e LITELLM_MASTER_KEY_SECRET_ARN=${litellmMasterKeySecret.secretArn} \\
   -e RDS_CREDENTIALS_SECRET_ARN=${rdsCredentialsSecret.secretArn} \\
   -e VALKEY_AUTH_SECRET_ARN=${valkeyAuthSecret.secretArn} \\
-  -e REDIS_HOST=$(aws elasticache describe-serverless-caches --serverless-cache-name cc-on-bedrock-valkey --query 'ServerlessCaches[0].Endpoint.Address' --output text) \\
+  -e REDIS_HOST=${valkeyCache.attrEndpointAddress} \\
   $ECR_REGISTRY/cc-on-bedrock/litellm:latest
 `),
     });
