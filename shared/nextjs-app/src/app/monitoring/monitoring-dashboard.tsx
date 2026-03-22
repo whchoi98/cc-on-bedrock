@@ -94,13 +94,10 @@ export default function MonitoringDashboard({
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [healthRes, containersRes, sysRes, cwRes, cwTsRes, tdRes] = await Promise.all([
+      const [healthRes, containersRes, sysRes] = await Promise.all([
         fetch("/api/health"),
         fetch("/api/containers"),
         fetch("/api/litellm?action=system_health"),
-        fetch("/api/container-metrics?action=current"),
-        fetch("/api/container-metrics?action=timeseries&hours=6"),
-        fetch("/api/container-metrics?action=taskdef"),
       ]);
 
       const healthJson = (await healthRes.json()) as {
@@ -124,12 +121,28 @@ export default function MonitoringDashboard({
       const sysJson = (await sysRes.json()) as ApiResponse<SystemHealth>;
       setSystemHealth(sysJson.data ?? null);
 
-      const cwJson = (await cwRes.json()) as ApiResponse<ContainerMetrics>;
-      setCwMetrics(cwJson.data ?? null);
-      const cwTsJson = (await cwTsRes.json()) as ApiResponse<MetricsTimeSeries>;
-      setCwTimeSeries(cwTsJson.data ?? null);
-      const tdJson = (await tdRes.json()) as ApiResponse<TaskDefMetrics[]>;
-      setTaskDefMetrics(tdJson.data ?? []);
+      // Container Insights - fetch separately to avoid blocking other data
+      try {
+        const [cwRes, cwTsRes, tdRes] = await Promise.all([
+          fetch("/api/container-metrics?action=current"),
+          fetch("/api/container-metrics?action=timeseries&hours=6"),
+          fetch("/api/container-metrics?action=taskdef"),
+        ]);
+        if (cwRes.ok) {
+          const cwJson = (await cwRes.json()) as ApiResponse<ContainerMetrics>;
+          setCwMetrics(cwJson.data ?? null);
+        }
+        if (cwTsRes.ok) {
+          const cwTsJson = (await cwTsRes.json()) as ApiResponse<MetricsTimeSeries>;
+          setCwTimeSeries(cwTsJson.data ?? null);
+        }
+        if (tdRes.ok) {
+          const tdJson = (await tdRes.json()) as ApiResponse<TaskDefMetrics[]>;
+          setTaskDefMetrics(tdJson.data ?? []);
+        }
+      } catch (cwErr) {
+        console.error("Container Insights fetch failed:", cwErr);
+      }
 
       setLastRefresh(new Date());
     } catch (err) {

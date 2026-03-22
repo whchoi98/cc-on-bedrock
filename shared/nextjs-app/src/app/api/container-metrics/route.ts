@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[container-metrics]", action, message);
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
