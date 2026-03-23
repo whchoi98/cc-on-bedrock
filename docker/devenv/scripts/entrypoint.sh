@@ -6,6 +6,17 @@ echo "=== CC-on-Bedrock Devenv Container Starting ==="
 USER_HOME="/home/coder"
 SECURITY_POLICY="${SECURITY_POLICY:-open}"
 
+# --- Claude Code → LiteLLM Proxy 강제 ---
+# 1. Task Role 크레덴셜 제거 (SDK가 IMDS로 폴백 시도하도록)
+unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+
+# 2. IMDS 차단 (coder 사용자만, root/ecs-agent는 허용)
+# → coder가 Instance Role로 Bedrock 직접 호출 불가
+iptables -A OUTPUT -m owner --uid-owner coder -d 169.254.169.254 -j DROP 2>/dev/null || echo "WARN: iptables not available (NET_ADMIN capability required)"
+
+# → Claude Code는 ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY로 LiteLLM 경유
+echo "Claude Code → LiteLLM proxy mode enabled"
+
 # --- EFS directory setup ---
 if [ -d "$USER_HOME/workspace" ]; then
   echo "EFS workspace already mounted"

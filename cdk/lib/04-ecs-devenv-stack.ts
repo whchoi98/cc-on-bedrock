@@ -208,17 +208,23 @@ export class EcsDevenvStack extends cdk.Stack {
             streamPrefix: `${os}-${tier.name}`,
           }),
           environment: {
-            // Claude Code uses Bedrock directly via ECS Instance Role (no LiteLLM proxy)
-            ANTHROPIC_MODEL: 'global.anthropic.claude-sonnet-4-6',
-            ANTHROPIC_SMALL_FAST_MODEL: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+            // Claude Code → LiteLLM Proxy (IMDS blocked via iptables in entrypoint.sh)
+            ANTHROPIC_BASE_URL: `http://${litellmAlbDns}:4000`,
+            // ANTHROPIC_API_KEY: overridden at RunTask time with per-user LiteLLM key
+            ANTHROPIC_MODEL: 'claude-sonnet-4-6',
+            ANTHROPIC_SMALL_FAST_MODEL: 'claude-sonnet-4-6',
             AWS_DEFAULT_REGION: 'ap-northeast-2',
             AWS_REGION: 'ap-northeast-2',
             SECURITY_POLICY: 'open',  // Overridden at RunTask time
           },
           portMappings: [{ containerPort: 8080 }],
-          linuxParameters: new ecs.LinuxParameters(this, `LinuxParams-${os}-${tier.name}`, {
-            initProcessEnabled: true,  // Required for ECS Exec
-          }),
+          linuxParameters: (() => {
+            const params = new ecs.LinuxParameters(this, `LinuxParams-${os}-${tier.name}`, {
+              initProcessEnabled: true,  // Required for ECS Exec
+            });
+            params.addCapabilities(ecs.Capability.NET_ADMIN);  // Required for iptables IMDS block
+            return params;
+          })(),
         });
 
         // EFS Volume

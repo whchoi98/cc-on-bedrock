@@ -23,7 +23,7 @@ install_packages() {
       apt-get install -y --no-install-recommends \
         curl wget git jq unzip tar gzip ca-certificates \
         build-essential python3 python3-pip python3-venv \
-        openssh-client sudo locales
+        openssh-client sudo locales iptables
       # Set locale
       locale-gen en_US.UTF-8
       ;;
@@ -32,7 +32,7 @@ install_packages() {
       # Note: curl-minimal is pre-installed on AL2023, don't install curl (conflicts)
       dnf install -y -q \
         wget git jq unzip tar gzip ca-certificates \
-        gcc gcc-c++ make python3 python3-pip \
+        gcc gcc-c++ make python3 python3-pip iptables \
         openssh-clients sudo
       ;;
     *)
@@ -46,7 +46,8 @@ install_packages() {
 create_user() {
   if ! id coder &>/dev/null; then
     useradd -m -s /bin/bash -d /home/coder coder
-    echo "coder ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/coder
+    # Restricted sudo: coder can only run code-server as root (no iptables, no credential access)
+    echo "coder ALL=(root) NOPASSWD: /usr/bin/code-server" > /etc/sudoers.d/coder
     chmod 0440 /etc/sudoers.d/coder
   fi
 }
