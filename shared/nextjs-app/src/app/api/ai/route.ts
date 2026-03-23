@@ -100,11 +100,11 @@ Cluster: ${cwLines}`;
 // ── Tool definitions for Converse API fallback ──
 const toolConfig: ToolConfiguration = {
   tools: [
-    { toolSpec: { name: "get_spend_summary", description: "Get spend/token data with per-user breakdown from LiteLLM", inputSchema: { json: {} } } },
-    { toolSpec: { name: "get_api_key_budgets", description: "Get API key budget status, utilization, limits", inputSchema: { json: {} } } },
-    { toolSpec: { name: "get_system_health", description: "Get proxy/DB/cache/model health status", inputSchema: { json: {} } } },
-    { toolSpec: { name: "get_container_status", description: "Get ECS container status and user assignments", inputSchema: { json: {} } } },
-    { toolSpec: { name: "get_container_metrics", description: "Get CloudWatch CPU/Memory/Network metrics", inputSchema: { json: {} } } },
+    { toolSpec: { name: "get_spend_summary", description: "Get spend/token data with per-user breakdown from LiteLLM", inputSchema: { json: { type: "object", properties: {}, required: [] } } } },
+    { toolSpec: { name: "get_api_key_budgets", description: "Get API key budget status, utilization, limits", inputSchema: { json: { type: "object", properties: {}, required: [] } } } },
+    { toolSpec: { name: "get_system_health", description: "Get proxy/DB/cache/model health status", inputSchema: { json: { type: "object", properties: {}, required: [] } } } },
+    { toolSpec: { name: "get_container_status", description: "Get ECS container status and user assignments", inputSchema: { json: { type: "object", properties: {}, required: [] } } } },
+    { toolSpec: { name: "get_container_metrics", description: "Get CloudWatch CPU/Memory/Network metrics", inputSchema: { json: { type: "object", properties: {}, required: [] } } } },
   ],
 };
 
@@ -140,7 +140,7 @@ async function executeTool(toolName: string): Promise<string> {
   } catch (e) { return JSON.stringify({ error: String(e) }); }
 }
 
-// ── Converse API fallback with tool use ──
+// ── Converse API with tool use (handles multiple simultaneous tool calls) ──
 async function converseWithTools(
   userMessages: { role: string; content: string }[],
   lang: string,
@@ -148,43 +148,82 @@ async function converseWithTools(
 ): Promise<void> {
   const systemPrompt = `You are CC-on-Bedrock AI Assistant. You analyze a multi-user Claude Code platform on AWS Bedrock.
 ALWAYS use tools to get current data before answering. ${lang === "ko" ? "Respond in Korean." : "Respond in English."}
-Use markdown tables for comparisons. Highlight warnings.`;
+Use markdown tables for comparisons. Highlight warnings. Format numbers clearly.`;
 
-  let messages: Message[] = userMessages.map(m => ({
+  const messages: Message[] = userMessages.map(m => ({
     role: m.role as "user" | "assistant",
     content: [{ text: m.content }],
   }));
 
-  for (let i = 0; i < 5; i++) {
-    const cmd = new ConverseStreamCommand({
-      modelId: MODEL_ID, system: [{ text: systemPrompt }],
-      messages, toolConfig, inferenceConfig: { maxTokens: 4096 },
-    });
+  for (let iteration = 0; iteration < 5; iteration++) {
+    try {
+      const cmd = new ConverseStreamCommand({
+        modelId: MODEL_ID, system: [{ text: systemPrompt }],
+        messages, toolConfig, inferenceConfig: { maxTokens: 4096 },
+      });
 
-    const resp = await getBedrockClient().send(cmd);
-    let text = "", toolId = "", toolName = "", stopReason = "";
+      const resp = await getBedrockClient().send(cmd);
+      let text = "";
+      let stopReason = "";
+      const toolCalls: { id: string; name: string }[] = [];
+      let currentToolId = "";
+      let currentToolName = "";
 
-    if (resp.stream) {
-      for await (const ev of resp.stream) {
-        if (ev.contentBlockDelta?.delta?.text) { text += ev.contentBlockDelta.delta.text; send({ text: ev.contentBlockDelta.delta.text }); }
-        if (ev.contentBlockStart?.start?.toolUse) { toolId = ev.contentBlockStart.start.toolUse.toolUseId ?? ""; toolName = ev.contentBlockStart.start.toolUse.name ?? ""; send({ status: `🔧 ${toolName}...` }); }
-        if (ev.messageStop) stopReason = ev.messageStop.stopReason ?? "";
-        if (ev.metadata?.usage) send({ usage: ev.metadata.usage });
+      if (resp.stream) {
+        for await (const ev of resp.stream) {
+          if (ev.contentBlockDelta?.delta?.text) {
+            text += ev.contentBlockDelta.delta.text;
+            send({ text: ev.contentBlockDelta.delta.text });
+          }
+          if (ev.contentBlockStart?.start?.toolUse) {
+            currentToolId = ev.contentBlockStart.start.toolUse.toolUseId ?? "";
+            currentToolName = ev.contentBlockStart.start.toolUse.name ?? "";
+            send({ status: `🔧 ${currentToolName}...` });
+          }
+          if (ev.contentBlockStop && currentToolName) {
+            toolCalls.push({ id: currentToolId, name: currentToolName });
+            currentToolName = "";
+            currentToolId = "";
+          }
+          if (ev.messageStop) stopReason = ev.messageStop.stopReason ?? "";
+          if (ev.metadata?.usage) send({ usage: ev.metadata.usage });
+        }
       }
-    }
 
-    if (stopReason === "tool_use" && toolName) {
-      const assistantContent: ContentBlock[] = [];
-      if (text) assistantContent.push({ text });
-      assistantContent.push({ toolUse: { toolUseId: toolId, name: toolName, input: {} } });
-      messages.push({ role: "assistant", content: assistantContent });
-      send({ status: `⚡ ${toolName}...` });
-      const result = await executeTool(toolName);
-      const toolResult: ToolResultContentBlock[] = [{ text: result }];
-      messages.push({ role: "user", content: [{ toolResult: { toolUseId: toolId, content: toolResult } }] });
-      continue;
+      // Handle tool use
+      if (stopReason === "tool_use" && toolCalls.length > 0) {
+        // Build assistant content with all tool calls
+        const assistantContent: ContentBlock[] = [];
+        if (text) assistantContent.push({ text });
+        for (const tc of toolCalls) {
+          assistantContent.push({ toolUse: { toolUseId: tc.id, name: tc.name, input: {} } });
+        }
+        messages.push({ role: "assistant", content: assistantContent });
+
+        // Execute all tools and collect results
+        const toolResults: ContentBlock[] = [];
+        for (const tc of toolCalls) {
+          send({ status: `⚡ ${tc.name}...` });
+          const result = await executeTool(tc.name);
+          toolResults.push({
+            toolResult: {
+              toolUseId: tc.id,
+              content: [{ text: result }] as ToolResultContentBlock[],
+            },
+          });
+        }
+        messages.push({ role: "user", content: toolResults });
+        send({ status: "" });
+        continue;
+      }
+
+      // end_turn - done
+      break;
+    } catch (err) {
+      console.error(`[AI] Converse iteration ${iteration} error:`, (err as Error).message);
+      send({ text: `\n\n⚠️ Error in iteration ${iteration}: ${(err as Error).message}` });
+      break;
     }
-    break;
   }
 }
 
@@ -208,54 +247,11 @@ export async function POST(req: NextRequest) {
       };
 
       try {
-        // Try AgentCore Runtime first
-        send({ status: "🤖 AgentCore Runtime..." });
-        const context = await gatherContext();
-        const lastMsg = [...userMessages].reverse().find(m => m.role === "user")?.content ?? "";
-        const enrichedPrompt = `${lastMsg}\n\n${context}${lang === "ko" ? "\n[Korean으로 답변]" : ""}`;
-
-        const agentPromise = (async () => {
-          const cmd = new InvokeAgentRuntimeCommand({
-            agentRuntimeArn: getAgentRuntimeArn(),
-            qualifier: "DEFAULT",
-            payload: new TextEncoder().encode(JSON.stringify({ prompt: enrichedPrompt })),
-          });
-          const resp = await getAgentCoreClient().send(cmd);
-          const sid = resp.runtimeSessionId;
-
-          let body = "";
-          if (resp.response instanceof Uint8Array) body = new TextDecoder().decode(resp.response);
-          else if (resp.response && Symbol.asyncIterator in (resp.response as object)) {
-            const chunks: Uint8Array[] = [];
-            for await (const c of resp.response as AsyncIterable<Uint8Array>) chunks.push(c);
-            body = new TextDecoder().decode(Buffer.concat(chunks));
-          } else body = String(resp.response ?? "");
-
-          if (sid) { try { await getAgentCoreClient().send(new StopRuntimeSessionCommand({ agentRuntimeArn: getAgentRuntimeArn(), runtimeSessionId: sid, qualifier: "DEFAULT" })); } catch {} }
-
-          let text = body;
-          try { const p = JSON.parse(body); text = typeof p.result === "string" ? p.result : body; const m = text.match(/'text':\s*'([\s\S]*?)'\}\]/); if (m) text = m[1].replace(/\\n/g, "\n").replace(/\\'/g, "'"); } catch {}
-          return text;
-        })();
-
-        const timeout = new Promise<string>((_, rej) => setTimeout(() => rej(new Error("timeout")), AGENTCORE_TIMEOUT_MS));
-
-        try {
-          const result = await Promise.race([agentPromise, timeout]);
-          send({ status: "" });
-          for (let i = 0; i < result.length; i += 30) {
-            send({ text: result.slice(i, i + 30) });
-            await new Promise(r => setTimeout(r, 5));
-          }
-          send({ done: true, via: "agentcore" });
-        } catch (agentErr) {
-          // Fallback to Converse API with tool use
-          console.error("[AI] AgentCore failed, falling back to Converse:", (agentErr as Error).message);
-          send({ status: "🔄 Bedrock Converse fallback..." });
-          await converseWithTools(userMessages.slice(-6), lang, send);
-          send({ status: "" });
-          send({ done: true, via: "converse-fallback" });
-        }
+        // Use Converse API with Tool Use directly (streams immediately, avoids CloudFront timeout)
+        send({ status: "🤖 Analyzing with Claude Sonnet 4.6..." });
+        await converseWithTools(userMessages.slice(-8), lang, send);
+        send({ status: "" });
+        send({ done: true, via: "Bedrock Converse + Tool Use" });
       } catch (err) {
         console.error("[AI Route] Error:", (err as Error).message);
         try { send({ text: `⚠️ Error: ${(err as Error).message}` }); send({ done: true }); } catch {}

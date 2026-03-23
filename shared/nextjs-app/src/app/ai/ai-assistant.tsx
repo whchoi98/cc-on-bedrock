@@ -1,13 +1,19 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useI18n } from "@/lib/i18n";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp?: string;
-  tokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  tools?: string[];
+  responseTime?: number;
+  via?: string;
 }
 
 const PRESETS_KO = [
@@ -28,85 +34,58 @@ const PRESETS_EN = [
   "Forecast monthly costs and recommend cost reduction strategies",
 ];
 
-// Render markdown as React elements (safe, no innerHTML)
+// Markdown renderer using react-markdown + remark-gfm
 function MarkdownText({ text }: { text: string }) {
-  const lines = text.split("\n");
-  const elements: React.ReactNode[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (line.startsWith("### ")) {
-      elements.push(<h3 key={i} className="text-sm font-semibold text-gray-200 mt-3 mb-1">{formatInline(line.slice(4))}</h3>);
-    } else if (line.startsWith("## ")) {
-      elements.push(<h2 key={i} className="text-base font-semibold text-gray-100 mt-4 mb-2">{formatInline(line.slice(3))}</h2>);
-    } else if (line.startsWith("# ")) {
-      elements.push(<h1 key={i} className="text-lg font-bold text-white mt-4 mb-2">{formatInline(line.slice(2))}</h1>);
-    } else if (line.startsWith("```")) {
-      // Code block
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      elements.push(
-        <pre key={i} className="bg-gray-900 border border-gray-700 rounded-lg p-3 overflow-x-auto my-2 text-xs">
-          <code>{codeLines.join("\n")}</code>
-        </pre>
-      );
-    } else if (line.startsWith("- ")) {
-      elements.push(<li key={i} className="ml-4 list-disc text-gray-300 text-sm">{formatInline(line.slice(2))}</li>);
-    } else if (/^\d+\. /.test(line)) {
-      elements.push(<li key={i} className="ml-4 list-decimal text-gray-300 text-sm">{formatInline(line.replace(/^\d+\. /, ""))}</li>);
-    } else if (line.startsWith("|") && line.endsWith("|")) {
-      // Table - collect rows
-      const tableRows: string[][] = [];
-      let j = i;
-      while (j < lines.length && lines[j].startsWith("|")) {
-        const cells = lines[j].split("|").filter(Boolean).map((c) => c.trim());
-        if (!cells.every((c) => /^[-:]+$/.test(c))) {
-          tableRows.push(cells);
-        }
-        j++;
-      }
-      elements.push(
-        <table key={i} className="w-full my-2 text-xs border-collapse">
-          <tbody>
-            {tableRows.map((row, ri) => (
-              <tr key={ri} className={ri === 0 ? "bg-gray-800/50" : ""}>
-                {row.map((cell, ci) => {
-                  const Tag = ri === 0 ? "th" : "td";
-                  return <Tag key={ci} className="px-2 py-1 border border-gray-700 text-gray-300">{cell}</Tag>;
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      );
-      i = j - 1;
-    } else if (line.trim() === "") {
-      elements.push(<br key={i} />);
-    } else {
-      elements.push(<p key={i} className="text-sm text-gray-300 leading-relaxed">{formatInline(line)}</p>);
-    }
-  }
-
-  return <>{elements}</>;
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h1 className="text-lg font-bold text-white mt-4 mb-2">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-base font-semibold text-gray-100 mt-4 mb-2">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-semibold text-gray-200 mt-3 mb-1">{children}</h3>,
+        h4: ({ children }) => <h4 className="text-sm font-medium text-gray-300 mt-2 mb-1">{children}</h4>,
+        p: ({ children }) => <p className="text-sm text-gray-300 leading-relaxed mb-2">{children}</p>,
+        strong: ({ children }) => <strong className="text-gray-100 font-semibold">{children}</strong>,
+        em: ({ children }) => <em className="text-gray-400 italic">{children}</em>,
+        a: ({ href, children }) => <a href={href} className="text-cyan-400 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+        ul: ({ children }) => <ul className="list-disc ml-4 mb-2 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal ml-4 mb-2 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="text-sm text-gray-300">{children}</li>,
+        blockquote: ({ children }) => <blockquote className="border-l-2 border-cyan-500/50 pl-3 my-2 text-sm text-gray-400 italic">{children}</blockquote>,
+        code: ({ className, children }) => {
+          const isBlock = className?.includes("language-");
+          if (isBlock) {
+            return (
+              <pre className="bg-gray-900 border border-gray-700 rounded-lg p-3 overflow-x-auto my-2">
+                <code className="text-xs text-gray-300">{children}</code>
+              </pre>
+            );
+          }
+          return <code className="bg-gray-800 px-1 py-0.5 rounded text-cyan-300 text-xs">{children}</code>;
+        },
+        pre: ({ children }) => <>{children}</>,
+        table: ({ children }) => <table className="w-full my-2 text-xs border-collapse">{children}</table>,
+        thead: ({ children }) => <thead className="bg-gray-800/50">{children}</thead>,
+        tbody: ({ children }) => <tbody>{children}</tbody>,
+        tr: ({ children }) => <tr className="border-b border-gray-700/50">{children}</tr>,
+        th: ({ children }) => <th className="px-2 py-1.5 text-left text-gray-300 font-medium border border-gray-700">{children}</th>,
+        td: ({ children }) => <td className="px-2 py-1.5 text-gray-400 border border-gray-700">{children}</td>,
+        hr: () => <hr className="border-gray-700 my-3" />,
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
 }
 
-function formatInline(text: string): React.ReactNode {
-  // Split by bold (**text**) and code (`text`)
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i} className="text-gray-100 font-semibold">{part.slice(2, -2)}</strong>;
-    }
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={i} className="bg-gray-800 px-1 py-0.5 rounded text-cyan-300 text-xs">{part.slice(1, -1)}</code>;
-    }
-    return part;
-  });
+interface HistoryEntry {
+  id: string;
+  timestamp: string;
+  question: string;
+  answer: string;
+  tools: string[];
+  tokens: { input: number; output: number };
+  responseTime: number;
 }
 
 export default function AIAssistant() {
@@ -116,6 +95,8 @@ export default function AIAssistant() {
   const [loading, setLoading] = useState(false);
   const [streamText, setStreamText] = useState("");
   const [toolStatus, setToolStatus] = useState("");
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const presets = locale === "ko" ? PRESETS_KO : PRESETS_EN;
@@ -125,6 +106,19 @@ export default function AIAssistant() {
   }, []);
 
   useEffect(() => { scrollToBottom(); }, [messages, streamText, scrollToBottom]);
+
+  // Load conversation history from AgentCore Memory
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await fetch("/api/ai/memory?limit=30");
+      if (res.ok) {
+        const json = await res.json();
+        setHistory(json.data ?? []);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { void loadHistory(); }, [loadHistory]);
 
   const sendMessage = async (text?: string) => {
     const content = text ?? input.trim();
@@ -158,7 +152,11 @@ export default function AIAssistant() {
 
       const decoder = new TextDecoder();
       let fullText = "";
+      let inputTokens = 0;
       let outputTokens = 0;
+      const toolsUsed: string[] = [];
+      let via = "";
+      const startTime = Date.now();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -169,13 +167,40 @@ export default function AIAssistant() {
           try {
             const data = JSON.parse(line.slice(6));
             if (data.text) { fullText += data.text; setStreamText(fullText); setToolStatus(""); }
-            if (data.status) { setToolStatus(data.status as string); }
-            if (data.usage) { outputTokens = data.usage.output_tokens ?? data.usage.outputTokens ?? 0; }
+            if (data.status) {
+              setToolStatus(data.status as string);
+              // Track tool names
+              const toolMatch = (data.status as string).match(/[🔧⚡]\s*(\w+)/);
+              if (toolMatch && !toolsUsed.includes(toolMatch[1])) toolsUsed.push(toolMatch[1]);
+            }
+            if (data.usage) {
+              inputTokens += data.usage.inputTokens ?? data.usage.input_tokens ?? 0;
+              outputTokens += data.usage.outputTokens ?? data.usage.output_tokens ?? 0;
+            }
+            if (data.via) via = data.via as string;
           } catch { /* ignore */ }
         }
       }
 
-      setMessages([...newMessages, { role: "assistant", content: fullText, timestamp: new Date().toISOString(), tokens: outputTokens }]);
+      const responseTime = Date.now() - startTime;
+      setMessages([...newMessages, {
+        role: "assistant", content: fullText, timestamp: new Date().toISOString(),
+        inputTokens, outputTokens, tools: toolsUsed, responseTime, via,
+      }]);
+
+      // Save to AgentCore Memory
+      fetch("/api/ai/memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: content,
+          answer: fullText,
+          tools: toolsUsed,
+          inputTokens,
+          outputTokens,
+          responseTime,
+        }),
+      }).then(() => void loadHistory()).catch(() => {});
       setStreamText("");
     } catch (err) {
       setMessages([...newMessages, { role: "assistant", content: `❌ Error: ${err instanceof Error ? err.message : "Unknown"}`, timestamp: new Date().toISOString() }]);
@@ -209,6 +234,11 @@ export default function AIAssistant() {
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
             Sonnet 4.6
           </span>
+          {history.length > 0 && (
+            <button onClick={() => setShowHistory(!showHistory)} className="px-2 py-1 text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors">
+              {locale === "ko" ? "히스토리" : "History"} ({history.length})
+            </button>
+          )}
           {messages.length > 0 && (
             <button onClick={() => setMessages([])} className="px-2 py-1 text-[10px] text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors">
               Clear
@@ -258,7 +288,30 @@ export default function AIAssistant() {
               msg.role === "user" ? "bg-blue-600 text-white" : "bg-[#111827] border border-gray-800/50 text-gray-200"
             }`}>
               {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : <p className="text-sm whitespace-pre-wrap">{msg.content}</p>}
-              {msg.tokens && msg.tokens > 0 && <p className="mt-2 text-[9px] text-gray-600">{msg.tokens} tokens</p>}
+              {msg.role === "assistant" && (msg.inputTokens || msg.tools?.length) && (
+                <div className="mt-3 pt-2 border-t border-gray-800/50 flex flex-wrap gap-x-4 gap-y-1">
+                  {msg.tools && msg.tools.length > 0 && (
+                    <span className="text-[9px] text-gray-500">
+                      🔧 {msg.tools.join(", ")}
+                    </span>
+                  )}
+                  {(msg.inputTokens || msg.outputTokens) && (
+                    <span className="text-[9px] text-gray-500">
+                      📊 In: {(msg.inputTokens ?? 0).toLocaleString()} · Out: {(msg.outputTokens ?? 0).toLocaleString()} tokens
+                    </span>
+                  )}
+                  {msg.responseTime && (
+                    <span className="text-[9px] text-gray-500">
+                      ⏱ {(msg.responseTime / 1000).toFixed(1)}s
+                    </span>
+                  )}
+                  {msg.via && (
+                    <span className="text-[9px] text-cyan-600">
+                      via {msg.via}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             {msg.role === "user" && (
               <div className="shrink-0 w-7 h-7 rounded-lg bg-blue-600/20 flex items-center justify-center mt-1">
@@ -312,6 +365,51 @@ export default function AIAssistant() {
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Conversation History */}
+      {history.length > 0 && (
+        <div className="border-t border-gray-800 pt-2">
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className="flex items-center gap-2 text-[10px] text-gray-500 hover:text-gray-300 transition-colors w-full"
+          >
+            <span>{showHistory ? "▼" : "▶"}</span>
+            <span>{locale === "ko" ? "대화 히스토리" : "Conversation History"} ({history.length})</span>
+            <span className="text-[9px] text-gray-600 ml-auto">AgentCore Memory</span>
+          </button>
+          {showHistory && (
+            <div className="mt-2 max-h-48 overflow-y-auto space-y-1.5">
+              {history.map((h) => (
+                <button
+                  key={h.id}
+                  onClick={() => void sendMessage(h.question as string)}
+                  className="w-full text-left p-2 rounded-lg bg-[#0a0f1a] border border-gray-800/30 hover:border-gray-700 transition-colors group"
+                >
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[10px] text-gray-400 truncate flex-1 mr-2 group-hover:text-cyan-400">
+                      {h.question as string}
+                    </span>
+                    <span className="text-[9px] text-gray-600 shrink-0">
+                      {h.timestamp ? new Date(h.timestamp as string).toLocaleString(locale === "ko" ? "ko-KR" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 text-[9px] text-gray-600">
+                    {(h.tools as string[])?.length > 0 && (
+                      <span>🔧 {(h.tools as string[]).length} tools</span>
+                    )}
+                    {h.tokens && (
+                      <span>📊 {((h.tokens as {input:number;output:number}).input + (h.tokens as {input:number;output:number}).output).toLocaleString()} tok</span>
+                    )}
+                    {h.responseTime && (
+                      <span>⏱ {((h.responseTime as number) / 1000).toFixed(1)}s</span>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Input */}
       <div className="pt-3 border-t border-gray-800">
