@@ -32,7 +32,7 @@ function getBedrockClient() {
 }
 
 function getAgentRuntimeArn(): string {
-  return AGENT_RUNTIME_ARN || `arn:aws:bedrock-agentcore:${region}:061525506239:runtime/cconbedrock_agent-xcceE4DydC`;
+  return AGENT_RUNTIME_ARN || "";
 }
 
 // ── Gather context for both AgentCore and fallback ──

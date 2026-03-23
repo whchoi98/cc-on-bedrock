@@ -125,9 +125,9 @@ export async function GET(req: NextRequest) {
         );
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[litellm] GET", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }
@@ -173,9 +173,9 @@ export async function POST(req: NextRequest) {
         );
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[litellm] POST", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }

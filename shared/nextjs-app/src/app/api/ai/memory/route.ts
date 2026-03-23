@@ -8,10 +8,14 @@ import {
 } from "@aws-sdk/client-bedrock-agentcore";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const MEMORY_ID = process.env.AGENTCORE_MEMORY_ID ?? "cconbedrock_memory-pHqYq73dKd";
+const MEMORY_ID = process.env.AGENTCORE_MEMORY_ID ?? "";
 
 function getClient() {
   return new BedrockAgentCoreClient({ region });
+}
+
+function sanitizeId(email: string): string {
+  return email.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
 export async function GET(req: NextRequest) {
@@ -23,38 +27,54 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const limit = parseInt(searchParams.get("limit") ?? "20", 10);
   const userEmail = session.user.email ?? "default";
-  // Use email as sessionId (user-scoped conversation history)
-  const sessionId = userEmail.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const actorId = sanitizeId(userEmail);
+  const sessionId = `session_${actorId}`;
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await getClient().send(new ListEventsCommand({
       memoryId: MEMORY_ID,
       sessionId,
-      maxResults: Math.min(limit, 100),
+      actorId,
+      includePayloads: true,
+      pageSize: Math.min(limit, 50),
     } as any));
 
-    const events = (result.events ?? []).map((e) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let payload: Record<string, any> = {};
-      try {
-        if (e.payload) payload = e.payload as any;
-      } catch { /* ignore */ }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const events = (result.events ?? []).map((e: any) => {
+      const payloads = e.payload ?? [];
+      let question = "";
+      let answerFull = "";
+
+      for (const p of payloads) {
+        if (p.conversational) {
+          const text = p.conversational.content?.text ?? "";
+          if (p.conversational.role === "USER") question = text;
+          if (p.conversational.role === "ASSISTANT") answerFull = text;
+        }
+      }
+
+      // Parse metadata from answer footer [tools:...][in:...][out:...][time:...]
+      const toolsMatch = answerFull.match(/\[tools:([^\]]*)\]/);
+      const inMatch = answerFull.match(/\[in:(\d+)\]/);
+      const outMatch = answerFull.match(/\[out:(\d+)\]/);
+      const timeMatch = answerFull.match(/\[time:(\d+)\]/);
+      const answer = answerFull.replace(/\n\n---\n\[tools:.*$/, "").slice(0, 200);
+
       return {
         id: e.eventId,
-        timestamp: payload.timestamp ?? "",
-        question: payload.question ?? "",
-        answer: String(payload.answer ?? "").slice(0, 200),
-        tools: payload.tools ?? [],
-        tokens: payload.tokens ?? { input: 0, output: 0 },
-        responseTime: payload.responseTime ?? 0,
+        timestamp: e.eventTimestamp ?? e.createdAt ?? "",
+        question,
+        answer,
+        tools: toolsMatch?.[1] ? toolsMatch[1].split(",").filter(Boolean) : [],
+        tokens: { input: parseInt(inMatch?.[1] ?? "0"), output: parseInt(outMatch?.[1] ?? "0") },
+        responseTime: parseInt(timeMatch?.[1] ?? "0"),
       };
-    });
+    }).filter((e: any) => e.question);
 
     return NextResponse.json({ success: true, data: events });
   } catch (err) {
     console.error("[Memory] List error:", (err as Error).message);
-    // Return empty on error (memory may not have events yet)
     return NextResponse.json({ success: true, data: [] });
   }
 }
@@ -68,22 +88,30 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const { question, answer, tools, inputTokens, outputTokens, responseTime } = body;
   const userEmail = session.user.email ?? "default";
-  const sessionId = userEmail.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const actorId = sanitizeId(userEmail);
+  const sessionId = `session_${actorId}`;
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await getClient().send(new CreateEventCommand({
       memoryId: MEMORY_ID,
       sessionId,
-      actorId: userEmail,
-      payload: {
-        question,
-        answer: String(answer).slice(0, 5000),
-        tools: tools ?? [],
-        tokens: { input: inputTokens ?? 0, output: outputTokens ?? 0 },
-        responseTime: responseTime ?? 0,
-        timestamp: new Date().toISOString(),
-      },
+      actorId,
+      eventTimestamp: new Date(),
+      payload: [
+        {
+          conversational: {
+            content: { text: question },
+            role: "USER",
+          },
+        },
+        {
+          conversational: {
+            content: { text: `${String(answer).slice(0, 4500)}\n\n---\n[tools:${(tools ?? []).join(",")}][in:${inputTokens ?? 0}][out:${outputTokens ?? 0}][time:${responseTime ?? 0}]` },
+            role: "ASSISTANT",
+          },
+        },
+      ],
     } as any));
 
     return NextResponse.json({ success: true });

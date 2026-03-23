@@ -35,8 +35,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[container-metrics]", action, message);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    console.error("[container-metrics]", action, err instanceof Error ? err.message : err);
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }

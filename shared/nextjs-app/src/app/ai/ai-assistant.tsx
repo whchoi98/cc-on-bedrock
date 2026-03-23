@@ -97,6 +97,10 @@ export default function AIAssistant() {
   const [toolStatus, setToolStatus] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const presets = locale === "ko" ? PRESETS_KO : PRESETS_EN;
@@ -119,6 +123,101 @@ export default function AIAssistant() {
   }, []);
 
   useEffect(() => { void loadHistory(); }, [loadHistory]);
+
+  // ── Voice Input (Speech Recognition) ──
+  const [pendingVoiceText, setPendingVoiceText] = useState("");
+
+  const startListening = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { alert(locale === "ko" ? "이 브라우저는 음성 인식을 지원하지 않습니다." : "Speech recognition not supported."); return; }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = locale === "ko" ? "ko-KR" : "en-US";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onresult = (e: any) => {
+      const transcript = Array.from(e.results).map((r: any) => r[0].transcript).join("");
+      setInput(transcript);
+      if (e.results[e.results.length - 1].isFinal) {
+        setPendingVoiceText(transcript);
+        setIsListening(false);
+      }
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  }, [locale]);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  }, []);
+
+  // ── Voice Output (Amazon Polly Generative TTS) ──
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [ttsLoading, setTtsLoading] = useState(false);
+
+  const speakText = useCallback(async (text: string) => {
+    if (!text.trim()) return;
+    setTtsLoading(true);
+    setIsSpeaking(true);
+
+    try {
+      // Stop previous audio
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.slice(0, 3000), lang: locale }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("[TTS] Polly API error:", res.status, errText);
+        setIsSpeaking(false);
+        setTtsLoading(false);
+        return;
+      }
+
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("audio")) {
+        console.error("[TTS] Unexpected content type:", contentType);
+        setIsSpeaking(false);
+        setTtsLoading(false);
+        return;
+      }
+
+      const audioBlob = await res.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+      audio.oncanplaythrough = () => setTtsLoading(false);
+      audio.onended = () => { setIsSpeaking(false); setTtsLoading(false); URL.revokeObjectURL(audioUrl); };
+      audio.onerror = (e) => { console.error("[TTS] Audio play error:", e); setIsSpeaking(false); setTtsLoading(false); URL.revokeObjectURL(audioUrl); };
+      await audio.play();
+    } catch (err) {
+      console.error("[TTS] Error:", err);
+      setIsSpeaking(false);
+      setTtsLoading(false);
+    }
+  }, [locale]);
+
+  const stopSpeaking = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    setIsSpeaking(false);
+  }, []);
 
   const sendMessage = async (text?: string) => {
     const content = text ?? input.trim();
@@ -188,6 +287,9 @@ export default function AIAssistant() {
         inputTokens, outputTokens, tools: toolsUsed, responseTime, via,
       }]);
 
+      // Auto-speak response via Polly
+      if (autoSpeak && fullText) void speakText(fullText);
+
       // Save to AgentCore Memory
       fetch("/api/ai/memory", {
         method: "POST",
@@ -210,6 +312,14 @@ export default function AIAssistant() {
     }
   };
 
+  // Auto-send voice input when recognition completes
+  useEffect(() => {
+    if (pendingVoiceText && !loading) {
+      void sendMessage(pendingVoiceText);
+      setPendingVoiceText("");
+    }
+  }, [pendingVoiceText, loading, sendMessage]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendMessage(); }
   };
@@ -226,7 +336,7 @@ export default function AIAssistant() {
           </div>
           <div>
             <h1 className="text-lg font-bold text-white">AI Assistant</h1>
-            <p className="text-[10px] text-gray-500">Powered by Claude Sonnet 4.6 on Bedrock</p>
+            <p className="text-[10px] text-gray-500">Powered by Claude Sonnet 4.6 on Bedrock · {locale === "ko" ? "음성 지원" : "Voice enabled"}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -289,7 +399,15 @@ export default function AIAssistant() {
             }`}>
               {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : <p className="text-sm whitespace-pre-wrap">{msg.content}</p>}
               {msg.role === "assistant" && (msg.inputTokens || msg.tools?.length) && (
-                <div className="mt-3 pt-2 border-t border-gray-800/50 flex flex-wrap gap-x-4 gap-y-1">
+                <div className="mt-3 pt-2 border-t border-gray-800/50 flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <button
+                    onClick={() => void speakText(msg.content)}
+                    disabled={isSpeaking}
+                    className="text-[9px] text-gray-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
+                    title={locale === "ko" ? "음성으로 듣기" : "Listen"}
+                  >
+                    {isSpeaking ? "🔊..." : "🔊"}
+                  </button>
                   {msg.tools && msg.tools.length > 0 && (
                     <span className="text-[9px] text-gray-500">
                       🔧 {msg.tools.join(", ")}
@@ -368,40 +486,47 @@ export default function AIAssistant() {
 
       {/* Conversation History */}
       {history.length > 0 && (
-        <div className="border-t border-gray-800 pt-2">
+        <div className="border-t border-gray-800 pt-3">
           <button
             onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center gap-2 text-[10px] text-gray-500 hover:text-gray-300 transition-colors w-full"
+            className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 rounded-lg transition-colors w-full"
           >
-            <span>{showHistory ? "▼" : "▶"}</span>
-            <span>{locale === "ko" ? "대화 히스토리" : "Conversation History"} ({history.length})</span>
-            <span className="text-[9px] text-gray-600 ml-auto">AgentCore Memory</span>
+            <svg className="w-4 h-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="font-medium">{locale === "ko" ? "대화 히스토리" : "Conversation History"}</span>
+            <span className="text-[10px] text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded-full">{history.length}</span>
+            <span className="text-[10px] text-cyan-600/60 ml-auto">AgentCore Memory</span>
+            <span className="text-gray-600">{showHistory ? "▼" : "▶"}</span>
           </button>
           {showHistory && (
-            <div className="mt-2 max-h-48 overflow-y-auto space-y-1.5">
+            <div className="mt-2 max-h-72 overflow-y-auto space-y-2 px-1">
               {history.map((h) => (
                 <button
                   key={h.id}
                   onClick={() => void sendMessage(h.question as string)}
-                  className="w-full text-left p-2 rounded-lg bg-[#0a0f1a] border border-gray-800/30 hover:border-gray-700 transition-colors group"
+                  className="w-full text-left p-3 rounded-xl bg-[#0a0f1a] border border-gray-800/40 hover:border-cyan-500/30 hover:bg-[#0d1420] transition-all group"
                 >
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-[10px] text-gray-400 truncate flex-1 mr-2 group-hover:text-cyan-400">
+                  <div className="flex items-start justify-between gap-3 mb-1.5">
+                    <span className="text-xs text-gray-300 group-hover:text-cyan-300 line-clamp-2 leading-relaxed">
                       {h.question as string}
                     </span>
-                    <span className="text-[9px] text-gray-600 shrink-0">
+                    <span className="text-[10px] text-gray-600 shrink-0 mt-0.5">
                       {h.timestamp ? new Date(h.timestamp as string).toLocaleString(locale === "ko" ? "ko-KR" : "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
                     </span>
                   </div>
-                  <div className="flex items-center gap-3 text-[9px] text-gray-600">
+                  {(h.answer as string) && (
+                    <p className="text-[10px] text-gray-600 truncate mb-1.5">{h.answer as string}</p>
+                  )}
+                  <div className="flex items-center gap-3 text-[10px]">
                     {(h.tools as string[])?.length > 0 && (
-                      <span>🔧 {(h.tools as string[]).length} tools</span>
+                      <span className="text-cyan-600">🔧 {(h.tools as string[]).length} tools</span>
                     )}
                     {h.tokens && (
-                      <span>📊 {((h.tokens as {input:number;output:number}).input + (h.tokens as {input:number;output:number}).output).toLocaleString()} tok</span>
+                      <span className="text-purple-600">📊 {((h.tokens as {input:number;output:number}).input + (h.tokens as {input:number;output:number}).output).toLocaleString()} tok</span>
                     )}
                     {h.responseTime && (
-                      <span>⏱ {((h.responseTime as number) / 1000).toFixed(1)}s</span>
+                      <span className="text-amber-600">⏱ {((h.responseTime as number) / 1000).toFixed(1)}s</span>
                     )}
                   </div>
                 </button>
@@ -412,17 +537,68 @@ export default function AIAssistant() {
       )}
 
       {/* Input */}
-      <div className="pt-3 border-t border-gray-800">
+      <div className="pt-3 border-t border-gray-800 space-y-2">
+        {/* Voice controls */}
+        <div className="flex items-center gap-2 px-1">
+          <button
+            onClick={() => setAutoSpeak(!autoSpeak)}
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] transition-colors ${autoSpeak ? "bg-cyan-900/30 text-cyan-400" : "bg-gray-800 text-gray-600"}`}
+          >
+            {autoSpeak ? "🔊" : "🔇"} Polly {locale === "ko" ? "음성" : "Voice"} {autoSpeak ? "ON" : "OFF"}
+          </button>
+          {ttsLoading && !isSpeaking && (
+            <span className="flex items-center gap-1 px-2 py-1 text-[10px] text-cyan-400 animate-pulse">
+              🔄 Polly {locale === "ko" ? "음성 생성 중..." : "Generating..."}
+            </span>
+          )}
+          {isSpeaking && (
+            <button onClick={stopSpeaking} className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] bg-red-900/30 text-red-400 animate-pulse">
+              ⏹ {locale === "ko" ? "읽기 중지" : "Stop"}
+            </button>
+          )}
+          {isListening && (
+            <span className="flex items-center gap-1 text-[10px] text-red-400 animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              {locale === "ko" ? "듣고 있습니다..." : "Listening..."}
+            </span>
+          )}
+        </div>
+
+        {/* Input row */}
         <div className="flex gap-2">
+          {/* Mic button */}
+          <button
+            onClick={isListening ? stopListening : startListening}
+            disabled={loading}
+            className={`px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+              isListening
+                ? "bg-red-600 text-white animate-pulse shadow-lg shadow-red-600/20"
+                : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+            } disabled:opacity-40`}
+            title={locale === "ko" ? "음성으로 질문하기" : "Ask by voice"}
+          >
+            {isListening ? (
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+              </svg>
+            )}
+          </button>
+
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={locale === "ko" ? "질문을 입력하세요... (Enter로 전송)" : "Ask a question... (Enter to send)"}
+            placeholder={locale === "ko" ? "질문을 입력하거나 🎤 마이크를 누르세요..." : "Type or press 🎤 to speak..."}
             rows={1}
             className="flex-1 px-4 py-2.5 text-sm bg-[#111827] border border-gray-800 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-transparent placeholder-gray-600 resize-none"
             disabled={loading}
           />
+
+          {/* Send button */}
           <button
             onClick={() => void sendMessage()}
             disabled={loading || !input.trim()}

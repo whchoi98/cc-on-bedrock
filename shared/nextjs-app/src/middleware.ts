@@ -6,6 +6,11 @@ export default withAuth(
     const token = req.nextauth.token;
     const path = req.nextUrl.pathname;
 
+    // Public API endpoints — allow unauthenticated access
+    if (path.startsWith("/api/health")) {
+      return NextResponse.json({ status: "ok" });
+    }
+
     // Admin-only routes
     if (path.startsWith("/admin") || path.startsWith("/monitoring")) {
       const groups = (token?.groups as string[]) ?? [];
@@ -18,7 +23,11 @@ export default withAuth(
   },
   {
     callbacks: {
-      authorized: ({ token }) => !!token,
+      authorized: ({ token, req }) => {
+        // Allow unauthenticated access to /api/health
+        if (req.nextUrl.pathname.startsWith("/api/health")) return true;
+        return !!token;
+      },
     },
   }
 );
@@ -28,6 +37,7 @@ export const config = {
     "/analytics/:path*",
     "/monitoring/:path*",
     "/admin/:path*",
+    "/api/:path*",
     "/",
   ],
 };

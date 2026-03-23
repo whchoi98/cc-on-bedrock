@@ -228,10 +228,14 @@ export class EcsDevenvStack extends cdk.Stack {
         });
 
         // EFS Volume
+        // NOTE: For user isolation, override rootDirectory at RunTask time
+        // with /users/{subdomain} to prevent cross-user file access.
+        // Or create per-user EFS Access Points for stronger isolation.
         taskDef.addVolume({
           name: 'efs-workspace',
           efsVolumeConfiguration: {
             fileSystemId: fileSystem.fileSystemId,
+            rootDirectory: '/',  // Override per-user at RunTask: /users/{subdomain}
             transitEncryption: 'ENABLED',
           },
         });

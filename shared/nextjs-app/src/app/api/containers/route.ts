@@ -36,9 +36,9 @@ export async function GET(req: NextRequest) {
     const containers = await listContainers();
     return NextResponse.json({ success: true, data: containers });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[containers] GET", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }
@@ -58,9 +58,9 @@ export async function POST(req: NextRequest) {
     const taskArn = await startContainer(body);
     return NextResponse.json({ success: true, data: { taskArn } });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[containers] POST", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }
@@ -80,9 +80,9 @@ export async function DELETE(req: NextRequest) {
     await stopContainer(body);
     return NextResponse.json({ success: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[containers] DELETE", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }

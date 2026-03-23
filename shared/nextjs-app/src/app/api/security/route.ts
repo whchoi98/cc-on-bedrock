@@ -23,18 +23,18 @@ import {
 } from "@aws-sdk/client-cognito-identity-provider";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const vpcId = process.env.VPC_ID ?? "vpc-0dfa5610180dfa628";
+const vpcId = process.env.VPC_ID ?? "";
 const r53Client = new Route53ResolverClient({ region });
 const ec2Client = new EC2Client({ region });
 const ctClient = new CloudTrailClient({ region });
 const cognitoClient = new CognitoIdentityProviderClient({ region });
-const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "ap-northeast-2_fqzT5ZOPa";
+const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
 
 // Known SG IDs
 const DLP_SGS: Record<string, string> = {
-  open: process.env.SG_DEVENV_OPEN ?? "sg-02e6e95f9d3bf5097",
-  restricted: process.env.SG_DEVENV_RESTRICTED ?? "sg-0b3a66be2e093a2b7",
-  locked: process.env.SG_DEVENV_LOCKED ?? "sg-075393574ed5ee366",
+  open: process.env.SG_DEVENV_OPEN ?? "",
+  restricted: process.env.SG_DEVENV_RESTRICTED ?? "",
+  locked: process.env.SG_DEVENV_LOCKED ?? "",
 };
 
 export async function GET(req: NextRequest) {
@@ -206,8 +206,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[security]", message);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    console.error("[security]", err instanceof Error ? err.message : err);
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }

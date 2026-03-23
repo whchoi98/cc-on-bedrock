@@ -43,7 +43,18 @@ export class DashboardStack extends cdk.Stack {
     }));
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'AgentCoreAccess',
-      actions: ['bedrock-agentcore:*'],
+      actions: [
+        'bedrock-agentcore:InvokeAgentRuntime',
+        'bedrock-agentcore:StopRuntimeSession',
+        'bedrock-agentcore:CreateEvent',
+        'bedrock-agentcore:ListEvents',
+        'bedrock-agentcore:GetAgentRuntime',
+      ],
+      resources: ['*'],
+    }));
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'PollyAccess',
+      actions: ['polly:SynthesizeSpeech'],
       resources: ['*'],
     }));
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
@@ -118,13 +129,14 @@ export class DashboardStack extends cdk.Stack {
         'tar xzf /tmp/dashboard-app.tar.gz -C /opt/dashboard',
         'rm /tmp/dashboard-app.tar.gz',
         '',
-        '# Fetch LiteLLM master key from Secrets Manager',
-        `LITELLM_KEY=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/litellm-master-key --region ap-northeast-2 --query SecretString --output text 2>/dev/null || echo "")`,
+        '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
+        'LITELLM_KEY=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/litellm-master-key --region ap-northeast-2 --query SecretString --output text 2>/dev/null || echo "")',
+        'NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ap-northeast-2 --query SecretString --output text 2>/dev/null || openssl rand -hex 32)',
         '',
-        '# Environment config (NEXTAUTH_URL will be updated post-deploy to CloudFront domain)',
+        '# Environment config',
         'cat > /opt/dashboard/.env << ENVEOF',
         `NEXTAUTH_URL=https://cconbedrock-dashboard.${config.domainName}`,
-        'NEXTAUTH_SECRET=$(openssl rand -hex 32)',
+        'NEXTAUTH_SECRET=$NEXTAUTH_SECRET_VAL',
         `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
         `COGNITO_ISSUER=https://cognito-idp.ap-northeast-2.amazonaws.com/${userPool.userPoolId}`,
         `LITELLM_API_URL=http://${litellmAlbDns}:4000`,

@@ -35,9 +35,9 @@ export async function GET(req: NextRequest) {
     const users = await listCognitoUsers();
     return NextResponse.json({ success: true, data: users });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[users] GET", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }
@@ -77,9 +77,9 @@ export async function POST(req: NextRequest) {
       data: { ...cognitoUser, litellmApiKey: litellmKey.key },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[users] POST", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }
@@ -99,9 +99,9 @@ export async function PUT(req: NextRequest) {
     await updateCognitoUser(body);
     return NextResponse.json({ success: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[users] PUT", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }
@@ -150,9 +150,9 @@ export async function DELETE(req: NextRequest) {
       }
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[users] DELETE", err instanceof Error ? err.message : err);
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: "Internal server error" },
       { status: 500 }
     );
   }
