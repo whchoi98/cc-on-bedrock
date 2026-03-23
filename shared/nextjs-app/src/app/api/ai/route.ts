@@ -23,8 +23,13 @@ const AGENT_RUNTIME_ARN = process.env.AGENTCORE_RUNTIME_ARN ?? "";
 const AGENTCORE_TIMEOUT_MS = 60000;
 const MODEL_ID = "global.anthropic.claude-sonnet-4-6";
 
-const agentCoreClient = new BedrockAgentCoreClient({ region });
-const bedrockClient = new BedrockRuntimeClient({ region });
+// Create clients per-request to avoid stale credential cache
+function getAgentCoreClient() {
+  return new BedrockAgentCoreClient({ region });
+}
+function getBedrockClient() {
+  return new BedrockRuntimeClient({ region });
+}
 
 function getAgentRuntimeArn(): string {
   return AGENT_RUNTIME_ARN || `arn:aws:bedrock-agentcore:${region}:061525506239:runtime/cconbedrock_agent-xcceE4DydC`;
@@ -156,7 +161,7 @@ Use markdown tables for comparisons. Highlight warnings.`;
       messages, toolConfig, inferenceConfig: { maxTokens: 4096 },
     });
 
-    const resp = await bedrockClient.send(cmd);
+    const resp = await getBedrockClient().send(cmd);
     let text = "", toolId = "", toolName = "", stopReason = "";
 
     if (resp.stream) {
@@ -215,7 +220,7 @@ export async function POST(req: NextRequest) {
             qualifier: "DEFAULT",
             payload: new TextEncoder().encode(JSON.stringify({ prompt: enrichedPrompt })),
           });
-          const resp = await agentCoreClient.send(cmd);
+          const resp = await getAgentCoreClient().send(cmd);
           const sid = resp.runtimeSessionId;
 
           let body = "";
@@ -226,7 +231,7 @@ export async function POST(req: NextRequest) {
             body = new TextDecoder().decode(Buffer.concat(chunks));
           } else body = String(resp.response ?? "");
 
-          if (sid) { try { await agentCoreClient.send(new StopRuntimeSessionCommand({ agentRuntimeArn: getAgentRuntimeArn(), runtimeSessionId: sid, qualifier: "DEFAULT" })); } catch {} }
+          if (sid) { try { await getAgentCoreClient().send(new StopRuntimeSessionCommand({ agentRuntimeArn: getAgentRuntimeArn(), runtimeSessionId: sid, qualifier: "DEFAULT" })); } catch {} }
 
           let text = body;
           try { const p = JSON.parse(body); text = typeof p.result === "string" ? p.result : body; const m = text.match(/'text':\s*'([\s\S]*?)'\}\]/); if (m) text = m[1].replace(/\\n/g, "\n").replace(/\\'/g, "'"); } catch {}

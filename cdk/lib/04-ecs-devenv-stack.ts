@@ -47,6 +47,16 @@ export class EcsDevenvStack extends cdk.Stack {
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
       resources: ['*'],
     }));
+    // SSM permissions for ECS Exec
+    ecsTaskRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'ssmmessages:CreateControlChannel',
+        'ssmmessages:CreateDataChannel',
+        'ssmmessages:OpenControlChannel',
+        'ssmmessages:OpenDataChannel',
+      ],
+      resources: ['*'],
+    }));
 
     // ECS Task Execution Role
     const ecsTaskExecutionRole = new iam.Role(this, 'EcsTaskExecutionRole', {
@@ -118,6 +128,11 @@ export class EcsDevenvStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
+    // Bedrock permissions for Claude Code in containers (uses Instance Role via IMDS)
+    ecsInstanceRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.M7G, ec2.InstanceSize.XLARGE4),
@@ -182,8 +197,6 @@ export class EcsDevenvStack extends cdk.Stack {
         });
 
         const container = taskDef.addContainer('devenv', {
-          // Use fromRegistry to avoid cross-stack grantPull cyclic reference
-          // ECR pull permission is handled via AmazonECSTaskExecutionRolePolicy managed policy
           image: ecs.ContainerImage.fromRegistry(
             `${cdk.Aws.ACCOUNT_ID}.dkr.ecr.${cdk.Aws.REGION}.amazonaws.com/cc-on-bedrock/devenv:${os}-latest`
           ),
@@ -195,11 +208,17 @@ export class EcsDevenvStack extends cdk.Stack {
             streamPrefix: `${os}-${tier.name}`,
           }),
           environment: {
-            ANTHROPIC_BASE_URL: `http://${litellmAlbDns}:4000`,
+            // Claude Code uses Bedrock directly via ECS Instance Role (no LiteLLM proxy)
+            ANTHROPIC_MODEL: 'global.anthropic.claude-sonnet-4-6',
+            ANTHROPIC_SMALL_FAST_MODEL: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
             AWS_DEFAULT_REGION: 'ap-northeast-2',
+            AWS_REGION: 'ap-northeast-2',
             SECURITY_POLICY: 'open',  // Overridden at RunTask time
           },
           portMappings: [{ containerPort: 8080 }],
+          linuxParameters: new ecs.LinuxParameters(this, `LinuxParams-${os}-${tier.name}`, {
+            initProcessEnabled: true,  // Required for ECS Exec
+          }),
         });
 
         // EFS Volume
@@ -224,8 +243,13 @@ export class EcsDevenvStack extends cdk.Stack {
       vpc, description: 'DevEnv ALB SG', allowAllOutbound: true,
     });
     // CloudFront Prefix List - allow only CloudFront IPs
-    // Note: pl-22a6434b is the CloudFront managed prefix list for ap-northeast-2
-    albSg.addIngressRule(ec2.Peer.prefixList('pl-22a6434b'), ec2.Port.tcp(443), 'Allow CloudFront');
+    albSg.addIngressRule(ec2.Peer.prefixList('pl-22a6434b'), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
+    albSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP (CloudFront http-only origin)');
+
+    // Allow ALB → DevEnv containers on port 8080
+    [sgOpen, sgRestricted, sgLocked].forEach(sg => {
+      sg.addIngressRule(albSg, ec2.Port.tcp(8080), 'Allow from DevEnv ALB');
+    });
 
     this.alb = new elbv2.ApplicationLoadBalancer(this, 'DevenvAlb', {
       vpc,
@@ -245,25 +269,23 @@ export class EcsDevenvStack extends cdk.Stack {
           messageBody: 'Forbidden',
         }),
       });
-    } else {
-      this.alb.addListener('HttpListener', {
-        port: 80,
-        protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden - ACM certificate not yet configured',
-        }),
-      });
     }
+    // HTTP listener (CloudFront uses http-only origin)
+    this.alb.addListener('HttpListener', {
+      port: 80,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+        contentType: 'text/plain',
+        messageBody: 'Forbidden',
+      }),
+    });
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(this.alb, {
-          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-          customHeaders: {
-            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
-          },
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          httpPort: 80,
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
@@ -285,5 +307,8 @@ export class EcsDevenvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ClusterName', { value: this.cluster.clusterName, exportName: 'cc-ecs-cluster-name' });
     new cdk.CfnOutput(this, 'EfsId', { value: fileSystem.fileSystemId, exportName: 'cc-efs-id' });
     new cdk.CfnOutput(this, 'CloudFrontDomain', { value: distribution.distributionDomainName, exportName: 'cc-devenv-cf-domain' });
+    new cdk.CfnOutput(this, 'SgOpen', { value: sgOpen.securityGroupId, exportName: 'cc-sg-devenv-open' });
+    new cdk.CfnOutput(this, 'SgRestricted', { value: sgRestricted.securityGroupId, exportName: 'cc-sg-devenv-restricted' });
+    new cdk.CfnOutput(this, 'SgLocked', { value: sgLocked.securityGroupId, exportName: 'cc-sg-devenv-locked' });
   }
 }

@@ -35,6 +35,36 @@ export class DashboardStack extends cdk.Stack {
             dashboardCertificateArn, hostedZone, cloudfrontSecret,
             userPool, userPoolClient, litellmAlbDns } = props;
 
+    // Dashboard EC2 Role - additional permissions for all dashboard features
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockAccess',
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreAccess',
+      actions: ['bedrock-agentcore:*'],
+      resources: ['*'],
+    }));
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'CloudWatchAccess',
+      actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics', 'cloudwatch:GetMetricStatistics'],
+      resources: ['*'],
+    }));
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'SecurityDashboard',
+      actions: [
+        'cloudtrail:LookupEvents',
+        'route53resolver:ListFirewallRuleGroupAssociations',
+        'route53resolver:ListFirewallRules',
+        'route53resolver:ListFirewallDomainLists',
+        'route53resolver:GetFirewallDomainList',
+        'route53resolver:GetFirewallRuleGroup',
+        'ec2:DescribeSecurityGroups',
+      ],
+      resources: ['*'],
+    }));
+
     // Security Group
     const albSg = new ec2.SecurityGroup(this, 'DashboardAlbSg', {
       vpc, description: 'Dashboard ALB SG', allowAllOutbound: true,
@@ -91,9 +121,9 @@ export class DashboardStack extends cdk.Stack {
         '# Fetch LiteLLM master key from Secrets Manager',
         `LITELLM_KEY=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/litellm-master-key --region ap-northeast-2 --query SecretString --output text 2>/dev/null || echo "")`,
         '',
-        '# Environment config',
+        '# Environment config (NEXTAUTH_URL will be updated post-deploy to CloudFront domain)',
         'cat > /opt/dashboard/.env << ENVEOF',
-        `NEXTAUTH_URL=https://ccbaedrock-dashboard.${config.domainName}`,
+        `NEXTAUTH_URL=https://cconbedrock-dashboard.${config.domainName}`,
         'NEXTAUTH_SECRET=$(openssl rand -hex 32)',
         `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
         `COGNITO_ISSUER=https://cognito-idp.ap-northeast-2.amazonaws.com/${userPool.userPoolId}`,
@@ -106,6 +136,7 @@ export class DashboardStack extends cdk.Stack {
         `DEV_SUBDOMAIN=${config.devSubdomain}`,
         'PORT=3000',
         'HOSTNAME=0.0.0.0',
+        `VPC_ID=${vpc.vpcId}`,
         'ENVEOF',
         '',
         '# Start Next.js',
