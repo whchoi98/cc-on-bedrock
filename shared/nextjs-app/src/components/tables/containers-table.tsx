@@ -187,7 +187,7 @@ export default function ContainersTable({
                         </span>
                       </div>
                       <span className="text-[9px] text-gray-600">
-                        {container.cpu} vCPU / {Math.round(parseInt(container.memory || "0") / 1024)} GiB
+                        {Math.round(parseInt(container.cpu || "0") / 1024)} vCPU / {Math.round(parseInt(container.memory || "0") / 1024)} GiB
                       </span>
                     </div>
                   </td>
