@@ -171,6 +171,8 @@ export default function AIAssistant() {
     setToolStatus("");
 
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -178,7 +180,9 @@ export default function AIAssistant() {
           messages: newMessages.slice(-10).map((m) => ({ role: m.role, content: m.content })),
           lang: locale,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
 
       if (!res.ok) {
         const err = await res.json();

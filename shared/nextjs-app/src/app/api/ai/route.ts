@@ -72,7 +72,17 @@ export async function POST(req: NextRequest) {
 
         send({ status: "Analyzing with AgentCore + MCP Tools..." });
 
-        const resp = await getClient().send(cmd);
+        // Keep-alive: send heartbeat every 5s while waiting for Runtime
+        const keepAlive = setInterval(() => {
+          send({ status: "AgentCore processing... (tools executing)" });
+        }, 5000);
+
+        let resp;
+        try {
+          resp = await getClient().send(cmd);
+        } finally {
+          clearInterval(keepAlive);
+        }
 
         // Read response from Runtime
         // SDK v3 returns response as StreamingBody (Blob/ReadableStream/Uint8Array)
