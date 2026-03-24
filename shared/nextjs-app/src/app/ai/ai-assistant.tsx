@@ -98,8 +98,7 @@ export default function AIAssistant() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [isSpeaking] = useState(false);
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -158,66 +157,6 @@ export default function AIAssistant() {
     setIsListening(false);
   }, []);
 
-  // ── Voice Output (Amazon Polly Generative TTS) ──
-
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [ttsLoading, setTtsLoading] = useState(false);
-
-  const speakText = useCallback(async (text: string) => {
-    if (!text.trim()) return;
-    setTtsLoading(true);
-    setIsSpeaking(true);
-
-    try {
-      // Stop previous audio
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.slice(0, 3000), lang: locale }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error("[TTS] Polly API error:", res.status, errText);
-        setIsSpeaking(false);
-        setTtsLoading(false);
-        return;
-      }
-
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("audio")) {
-        console.error("[TTS] Unexpected content type:", contentType);
-        setIsSpeaking(false);
-        setTtsLoading(false);
-        return;
-      }
-
-      const audioBlob = await res.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-
-      const audio = new Audio(audioUrl);
-      audioRef.current = audio;
-      audio.oncanplaythrough = () => setTtsLoading(false);
-      audio.onended = () => { setIsSpeaking(false); setTtsLoading(false); URL.revokeObjectURL(audioUrl); };
-      audio.onerror = (e) => { console.error("[TTS] Audio play error:", e); setIsSpeaking(false); setTtsLoading(false); URL.revokeObjectURL(audioUrl); };
-      await audio.play();
-    } catch (err) {
-      console.error("[TTS] Error:", err);
-      setIsSpeaking(false);
-      setTtsLoading(false);
-    }
-  }, [locale]);
-
-  const stopSpeaking = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current = null;
-    }
-    setIsSpeaking(false);
-  }, []);
 
   const sendMessage = async (text?: string) => {
     const content = text ?? input.trim();
@@ -286,9 +225,6 @@ export default function AIAssistant() {
         role: "assistant", content: fullText, timestamp: new Date().toISOString(),
         inputTokens, outputTokens, tools: toolsUsed, responseTime, via,
       }]);
-
-      // Auto-speak response via Polly
-      if (autoSpeak && fullText) void speakText(fullText);
 
       // Save to AgentCore Memory
       fetch("/api/ai/memory", {
@@ -400,14 +336,6 @@ export default function AIAssistant() {
               {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : <p className="text-sm whitespace-pre-wrap">{msg.content}</p>}
               {msg.role === "assistant" && (msg.inputTokens || msg.tools?.length) && (
                 <div className="mt-3 pt-2 border-t border-gray-800/50 flex flex-wrap items-center gap-x-4 gap-y-1">
-                  <button
-                    onClick={() => void speakText(msg.content)}
-                    disabled={isSpeaking}
-                    className="text-[9px] text-gray-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
-                    title={locale === "ko" ? "음성으로 듣기" : "Listen"}
-                  >
-                    {isSpeaking ? "🔊..." : "🔊"}
-                  </button>
                   {msg.tools && msg.tools.length > 0 && (
                     <span className="text-[9px] text-gray-500">
                       🔧 {msg.tools.join(", ")}
@@ -538,31 +466,15 @@ export default function AIAssistant() {
 
       {/* Input */}
       <div className="pt-3 border-t border-gray-800 space-y-2">
-        {/* Voice controls */}
-        <div className="flex items-center gap-2 px-1">
-          <button
-            onClick={() => setAutoSpeak(!autoSpeak)}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] transition-colors ${autoSpeak ? "bg-cyan-900/30 text-cyan-400" : "bg-gray-800 text-gray-600"}`}
-          >
-            {autoSpeak ? "🔊" : "🔇"} Polly {locale === "ko" ? "음성" : "Voice"} {autoSpeak ? "ON" : "OFF"}
-          </button>
-          {ttsLoading && !isSpeaking && (
-            <span className="flex items-center gap-1 px-2 py-1 text-[10px] text-cyan-400 animate-pulse">
-              🔄 Polly {locale === "ko" ? "음성 생성 중..." : "Generating..."}
-            </span>
-          )}
-          {isSpeaking && (
-            <button onClick={stopSpeaking} className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] bg-red-900/30 text-red-400 animate-pulse">
-              ⏹ {locale === "ko" ? "읽기 중지" : "Stop"}
-            </button>
-          )}
-          {isListening && (
+        {/* Voice status */}
+        {isListening && (
+          <div className="flex items-center gap-2 px-1">
             <span className="flex items-center gap-1 text-[10px] text-red-400 animate-pulse">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
               {locale === "ko" ? "듣고 있습니다..." : "Listening..."}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Input row */}
         <div className="flex gap-2">

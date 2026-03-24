@@ -52,11 +52,6 @@ export class DashboardStack extends cdk.Stack {
       resources: ['*'],
     }));
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'PollyAccess',
-      actions: ['polly:SynthesizeSpeech'],
-      resources: ['*'],
-    }));
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'CloudWatchAccess',
       actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics', 'cloudwatch:GetMetricStatistics'],
       resources: ['*'],
