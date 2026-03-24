@@ -264,6 +264,7 @@ export async function startContainer(
       taskDefinition,
       count: 1,
       launchType: "EC2",
+      enableExecuteCommand: true,
       networkConfiguration: {
         awsvpcConfiguration: {
           subnets: (process.env.PRIVATE_SUBNET_IDS ?? "").split(","),

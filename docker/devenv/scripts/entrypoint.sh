@@ -5,33 +5,41 @@ echo "=== CC-on-Bedrock Devenv Container Starting ==="
 
 USER_HOME="/home/coder"
 SECURITY_POLICY="${SECURITY_POLICY:-open}"
+SUBDOMAIN="${USER_SUBDOMAIN:-default}"
 
-# --- EFS directory setup ---
-if [ -d "$USER_HOME/workspace" ]; then
-  echo "EFS workspace already mounted"
-else
-  mkdir -p "$USER_HOME/workspace"
-fi
+# --- Per-user EFS directory isolation ---
+# EFS is mounted at /home/coder (shared root).
+# Each user gets their own subdirectory: /home/coder/users/{subdomain}/
+# code-server workspace points to the user's directory.
+EFS_USER_DIR="$USER_HOME/users/$SUBDOMAIN"
+USER_WORKSPACE="$EFS_USER_DIR/workspace"
+USER_DATA_DIR="$EFS_USER_DIR/.local/share/code-server"
+USER_CONFIG_DIR="$EFS_USER_DIR/.config"
 
-# Ensure correct ownership
-chown -R coder:coder "$USER_HOME"
+echo "Setting up user directory: $EFS_USER_DIR"
 
-# --- Ensure .bashrc.d directory exists ---
-sudo -u coder mkdir -p "$USER_HOME/.bashrc.d"
+# Create per-user directory structure on EFS
+mkdir -p "$USER_WORKSPACE"
+mkdir -p "$USER_DATA_DIR/User"
+mkdir -p "$USER_CONFIG_DIR"
+mkdir -p "$EFS_USER_DIR/.bashrc.d"
+mkdir -p "$EFS_USER_DIR/.claude"
+mkdir -p "$EFS_USER_DIR/.kiro/settings"
+
+# Ensure correct ownership (only user's directory, not entire EFS)
+chown -R coder:coder "$EFS_USER_DIR"
 
 # --- Configure Kiro for Bedrock ---
-sudo -u coder mkdir -p "$USER_HOME/.kiro/settings"
-cat > "$USER_HOME/.kiro/settings/bedrock.json" << KIROEOF
+cat > "$EFS_USER_DIR/.kiro/settings/bedrock.json" << KIROEOF
 {
   "aws_region": "${AWS_DEFAULT_REGION:-ap-northeast-2}",
   "bearer_token": "${AWS_BEARER_TOKEN_BEDROCK:-}"
 }
 KIROEOF
-chown coder:coder "$USER_HOME/.kiro/settings/bedrock.json"
+chown coder:coder "$EFS_USER_DIR/.kiro/settings/bedrock.json"
 
 # --- MCP Server Configuration ---
-sudo -u coder mkdir -p "$USER_HOME/.claude"
-cat > "$USER_HOME/.claude/mcp_servers.json" << MCPEOF
+cat > "$EFS_USER_DIR/.claude/mcp_servers.json" << MCPEOF
 {
   "awslabs-core-mcp-server": {
     "command": "uvx",
@@ -45,7 +53,7 @@ cat > "$USER_HOME/.claude/mcp_servers.json" << MCPEOF
   }
 }
 MCPEOF
-chown coder:coder "$USER_HOME/.claude/mcp_servers.json"
+chown coder:coder "$EFS_USER_DIR/.claude/mcp_servers.json"
 
 # --- Security Policy: code-server flags ---
 CODESERVER_FLAGS=""
@@ -70,19 +78,31 @@ case "$SECURITY_POLICY" in
 esac
 
 # --- Copy default VSCode settings if not exists ---
-if [ ! -f "$USER_HOME/.local/share/code-server/User/settings.json" ]; then
-  sudo -u coder mkdir -p "$USER_HOME/.local/share/code-server/User"
-  cp /opt/devenv/config/settings.json "$USER_HOME/.local/share/code-server/User/settings.json"
-  chown coder:coder "$USER_HOME/.local/share/code-server/User/settings.json"
+if [ ! -f "$USER_DATA_DIR/User/settings.json" ]; then
+  cp /opt/devenv/config/settings.json "$USER_DATA_DIR/User/settings.json"
+  chown coder:coder "$USER_DATA_DIR/User/settings.json"
 fi
 
-# --- Ensure .bashrc.d sourcing ---
-sudo -u coder bash -c "
-  mkdir -p $USER_HOME/.bashrc.d
-  if ! grep -q 'bashrc.d' $USER_HOME/.bashrc 2>/dev/null; then
-    echo 'for f in ~/.bashrc.d/*.sh; do [ -r \"\$f\" ] && source \"\$f\"; done' >> $USER_HOME/.bashrc
+# --- Ensure .bashrc.d sourcing in user's bashrc ---
+USER_BASHRC="$EFS_USER_DIR/.bashrc"
+if [ ! -f "$USER_BASHRC" ]; then
+  cp /etc/skel/.bashrc "$USER_BASHRC" 2>/dev/null || touch "$USER_BASHRC"
+  chown coder:coder "$USER_BASHRC"
+fi
+if ! grep -q 'bashrc.d' "$USER_BASHRC" 2>/dev/null; then
+  echo 'for f in ~/.bashrc.d/*.sh; do [ -r "$f" ] && source "$f"; done' >> "$USER_BASHRC"
+fi
+
+# --- Symlink user config to home directory ---
+# code-server and Claude Code expect configs in $HOME
+for item in .bashrc .bashrc.d .claude .kiro .config; do
+  src="$EFS_USER_DIR/$item"
+  dst="$USER_HOME/$item"
+  if [ -e "$src" ] && [ ! -L "$dst" ]; then
+    rm -rf "$dst" 2>/dev/null || true
+    ln -sf "$src" "$dst"
   fi
-"
+done
 
 # --- Start idle monitor in background ---
 /opt/devenv/scripts/idle-monitor.sh &
@@ -94,17 +114,18 @@ cat > /etc/profile.d/claude-env.sh << ENVEOF
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
 export AWS_REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
+export HOME="$USER_HOME"
 ENVEOF
 chmod 644 /etc/profile.d/claude-env.sh
-if ! grep -q "profile.d/claude-env" "$USER_HOME/.bashrc" 2>/dev/null; then
-  echo '[ -f /etc/profile.d/claude-env.sh ] && source /etc/profile.d/claude-env.sh' >> "$USER_HOME/.bashrc"
+if ! grep -q "profile.d/claude-env" "$USER_BASHRC" 2>/dev/null; then
+  echo '[ -f /etc/profile.d/claude-env.sh ] && source /etc/profile.d/claude-env.sh' >> "$USER_BASHRC"
 fi
-echo "Starting code-server (Bedrock native mode)"
+echo "Starting code-server for user: $SUBDOMAIN (Bedrock native mode)"
 exec sudo -u coder \
   PASSWORD="${CODESERVER_PASSWORD:-}" \
   code-server \
   --bind-addr 0.0.0.0:8080 \
   --auth "${CODESERVER_AUTH:-password}" \
-  --user-data-dir "$USER_HOME/.local/share/code-server" \
+  --user-data-dir "$USER_DATA_DIR" \
   $CODESERVER_FLAGS \
-  "$USER_HOME/workspace"
+  "$USER_WORKSPACE"
