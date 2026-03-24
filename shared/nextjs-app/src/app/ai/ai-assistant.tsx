@@ -98,7 +98,7 @@ export default function AIAssistant() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [isSpeaking] = useState(false);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -334,7 +334,7 @@ export default function AIAssistant() {
               msg.role === "user" ? "bg-blue-600 text-white" : "bg-[#111827] border border-gray-800/50 text-gray-200"
             }`}>
               {msg.role === "assistant" ? <MarkdownText text={msg.content} /> : <p className="text-sm whitespace-pre-wrap">{msg.content}</p>}
-              {msg.role === "assistant" && (msg.inputTokens || msg.tools?.length) && (
+              {msg.role === "assistant" && (
                 <div className="mt-3 pt-2 border-t border-gray-800/50 flex flex-wrap items-center gap-x-4 gap-y-1">
                   {msg.tools && msg.tools.length > 0 && (
                     <span className="text-[9px] text-gray-500">
@@ -356,6 +356,21 @@ export default function AIAssistant() {
                       via {msg.via}
                     </span>
                   )}
+                  <button
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(msg.content);
+                      setCopiedIdx(i);
+                      setTimeout(() => setCopiedIdx(null), 2000);
+                    }}
+                    className="ml-auto text-[9px] text-gray-600 hover:text-gray-300 transition-colors flex items-center gap-1"
+                    title={locale === "ko" ? "복사" : "Copy"}
+                  >
+                    {copiedIdx === i ? (
+                      <><svg className="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg><span className="text-green-400">{locale === "ko" ? "복사됨" : "Copied"}</span></>
+                    ) : (
+                      <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" /></svg><span>{locale === "ko" ? "복사" : "Copy"}</span></>
+                    )}
+                  </button>
                 </div>
               )}
             </div>
