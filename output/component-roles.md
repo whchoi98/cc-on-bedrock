@@ -1,5 +1,12 @@
+> **Language / 언어**: [한국어](#ko) | [English](#en)
+
+---
+
+<a id="ko"></a>
+
 # CC-on-Bedrock 컴포넌트별 역할
 
+<a id="ko-user-access-path"></a>
 ## 사용자 접속 경로
 
 ```
@@ -8,6 +15,7 @@ Browser → CloudFront → ALB → EC2/ECS → AWS Services
 
 ---
 
+<a id="ko-network-layer"></a>
 ## 네트워크 계층 (Stack 01: Network)
 
 | 컴포넌트 | 역할 |
@@ -22,6 +30,7 @@ Browser → CloudFront → ALB → EC2/ECS → AWS Services
 
 ---
 
+<a id="ko-security-layer"></a>
 ## 보안 계층 (Stack 02: Security)
 
 | 컴포넌트 | 역할 |
@@ -35,6 +44,7 @@ Browser → CloudFront → ALB → EC2/ECS → AWS Services
 
 ---
 
+<a id="ko-usage-tracking"></a>
 ## 사용량 추적 (Stack 03: Usage Tracking)
 
 | 컴포넌트 | 역할 |
@@ -48,6 +58,7 @@ Browser → CloudFront → ALB → EC2/ECS → AWS Services
 
 ---
 
+<a id="ko-devenv-container"></a>
 ## DevEnv 컨테이너 (Stack 04: ECS Dev Environment)
 
 | 컴포넌트 | 역할 |
@@ -63,6 +74,7 @@ Browser → CloudFront → ALB → EC2/ECS → AWS Services
 
 ---
 
+<a id="ko-dashboard"></a>
 ## Dashboard (Stack 05: Dashboard)
 
 | 컴포넌트 | 역할 |
@@ -75,6 +87,7 @@ Browser → CloudFront → ALB → EC2/ECS → AWS Services
 
 ---
 
+<a id="ko-ai-ml-services"></a>
 ## AI/ML 서비스
 
 | 컴포넌트 | 역할 |
@@ -85,6 +98,7 @@ Browser → CloudFront → ALB → EC2/ECS → AWS Services
 
 ---
 
+<a id="ko-data-flow"></a>
 ## 데이터 흐름 요약
 
 ### 사용자 로그인
@@ -115,6 +129,7 @@ Lambda (5분마다) → DynamoDB 스캔 → 초과 시 → IAM Deny Policy + SNS
 
 ---
 
+<a id="ko-security-defense"></a>
 ## 보안 다층 방어
 
 ```
@@ -129,6 +144,7 @@ Layer 7: DLP                 (code-server 파일 업/다운로드 제한, 확장
 
 ---
 
+<a id="ko-task-definition"></a>
 ## Task Definition 사양표
 
 | Task Definition | OS | vCPU | Memory | 용도 |
@@ -142,6 +158,7 @@ Layer 7: DLP                 (code-server 파일 업/다운로드 제한, 확장
 
 ---
 
+<a id="ko-dashboard-pages"></a>
 ## Dashboard 페이지 구성
 
 | 페이지 | 접근 권한 | 주요 기능 |
@@ -153,3 +170,174 @@ Layer 7: DLP                 (code-server 파일 업/다운로드 제한, 확장
 | Security | admin | IAM 정책, DLP 현황, DNS Firewall 규칙, 보안 체크리스트 |
 | Users | admin | Cognito 사용자 CRUD, 소팅/필터, 보안 정책 배정 |
 | Containers | admin | ECS 컨테이너 시작/중지, 소팅/필터, 중복 방지 |
+
+---
+
+<a id="en"></a>
+
+# CC-on-Bedrock Component Roles
+
+<a id="en-user-access-path"></a>
+## User Access Path
+
+```
+Browser → CloudFront → ALB → EC2/ECS → AWS Services
+```
+
+---
+
+<a id="en-network-layer"></a>
+## Network Layer (Stack 01: Network)
+
+| Component | Role |
+|-----------|------|
+| **VPC** (10.100.0.0/16) | Virtual network where all resources are deployed. Isolated private network space separated from the public internet |
+| **Public Subnet** (2 AZ) | Subnets directly accessible from the internet. ALB and NAT Gateway are placed here |
+| **Private Subnet** (2 AZ) | Not directly accessible from the internet. ECS containers and Dashboard EC2 are placed here. Access external resources via NAT |
+| **NAT Gateway** (x2) | Gateway that allows resources in Private Subnets to access the internet. One per AZ for high availability |
+| **VPC Endpoints** (8) | Access AWS services (Bedrock, ECR, SSM, CloudWatch, S3, etc.) via internal VPC paths without internet. Enhanced security + cost savings |
+| **Route 53** | DNS service. `*.dev.whchoi.net` → DevEnv CloudFront, `cconbedrock-dashboard.whchoi.net` → Dashboard CloudFront |
+| **DNS Firewall** | VPC-level DNS filtering. Blocks malicious domains (5 AWS-managed threat lists + custom block list) |
+
+---
+
+<a id="en-security-layer"></a>
+## Security Layer (Stack 02: Security)
+
+| Component | Role |
+|-----------|------|
+| **Cognito User Pool** | User authentication/management service. Email+password login, user creation/deletion, group management (admin/user) |
+| **Cognito Hosted UI** | Login web page provided by Cognito. Hosted at `cc-on-bedrock.auth.amazoncognito.com` |
+| **ACM** (Certificate Manager) | SSL/TLS certificate management. `*.whchoi.net` wildcard certificate → provides HTTPS at CloudFront + ALB |
+| **KMS** (Key Management Service) | Encryption key management. Used for EBS, Secrets Manager, and DynamoDB data encryption |
+| **Secrets Manager** | Sensitive information store. Securely stores NextAuth Secret, CloudFront secret header values, etc. |
+| **IAM Roles** | Defines AWS permissions for each service. ECS Task Role (Bedrock invocation), Dashboard EC2 Role (Cognito/ECS/DynamoDB management) |
+
+---
+
+<a id="en-usage-tracking"></a>
+## Usage Tracking (Stack 03: Usage Tracking)
+
+| Component | Role |
+|-----------|------|
+| **CloudTrail** | Records all AWS API calls. Detects Bedrock `InvokeModel` calls and generates events |
+| **EventBridge** | Event router. Detects Bedrock API events from CloudTrail and triggers Lambda |
+| **Lambda** (usage-tracker) | Records Bedrock API call information (user, model, tokens) to DynamoDB |
+| **Lambda** (budget-check) | Runs every 5 minutes. Aggregates per-user costs → attaches IAM Deny Policy + SNS notification when budget is exceeded |
+| **DynamoDB** | Usage data store. Structure: `PK: USER#{username}, SK: {date}#{model}`. Queried by Dashboard |
+| **SNS** | Sends budget exceeded notifications (notifies administrators via email/SMS) |
+
+---
+
+<a id="en-devenv-container"></a>
+## DevEnv Containers (Stack 04: ECS Dev Environment)
+
+| Component | Role |
+|-----------|------|
+| **CloudFront** (DevEnv) | CDN + HTTPS termination. Forwards `*.dev.whchoi.net` requests to ALB. DDoS protection, global edge |
+| **ALB** (DevEnv) | Load balancer. **Host-based routing** — `user01.dev.whchoi.net` → user01 container, `user02.dev.whchoi.net` → user02 container |
+| **ECS Cluster** (EC2 mode) | Container orchestration. Docker container scheduling, placement, health checks |
+| **EC2 Host** (m7g.4xlarge x8) | Physical instances where ECS containers actually run. ARM64 Graviton3, 16vCPU/64GiB |
+| **Task Definition** (6 types) | Container spec definitions. `{OS} x {Tier}` = Ubuntu/AL2023 x Light/Standard/Power |
+| **ECS Task** | Running container instance. One per user. code-server + Claude Code + Kiro |
+| **EFS** (Elastic File System) | Shared file storage. Mounted at `/home/coder`. Work data persists across container restarts |
+| **Security Groups** (3 types) | Network firewall. **Open** (allow all) / **Restricted** (limited) / **Locked** (VPC internal only) |
+
+---
+
+<a id="en-dashboard"></a>
+## Dashboard (Stack 05: Dashboard)
+
+| Component | Role |
+|-----------|------|
+| **CloudFront** (Dashboard) | CDN + HTTPS termination. `cconbedrock-dashboard.whchoi.net` → ALB. Blocks direct ALB access via X-Custom-Secret header |
+| **ALB** (Dashboard) | Load balancer. Only accepts requests from CloudFront (Prefix List + Secret Header verification) |
+| **EC2 ASG** (t4g.xlarge) | Dashboard server. Runs Next.js standalone app with PM2. Min:1 / Max:2 auto-scaling |
+| **Next.js App** | 7-page web dashboard. Usage analytics, monitoring, user/container management, AI assistant |
+| **S3** (Deploy Bucket) | Dashboard deployment artifact storage. `npm run build` → tar.gz → S3 upload → EC2 download |
+
+---
+
+<a id="en-ai-ml-services"></a>
+## AI/ML Services
+
+| Component | Role |
+|-----------|------|
+| **Amazon Bedrock** | AI model hosting. Provides Claude Opus 4.6 / Sonnet 4.6 models. ECS Task calls directly (Direct Mode) |
+| **Bedrock VPC Endpoint** | Invokes Bedrock API from within the VPC. Traffic does not traverse the internet → security + low latency |
+| **AgentCore Memory** | Stores AI Assistant conversation memory. Maintains previous conversation context for continuous consultation |
+
+---
+
+<a id="en-data-flow"></a>
+## Data Flow Summary
+
+### User Login
+
+```
+Browser → CloudFront → ALB → Next.js → Cognito OAuth → Authentication Complete
+```
+
+### Container Usage (Claude Code Development)
+
+```
+Browser → CloudFront → ALB (Host routing) → ECS Task (code-server)
+Inside code-server: Claude Code → ECS Task Role → VPC Endpoint → Bedrock
+```
+
+### Usage Tracking
+
+```
+Bedrock API Call → CloudTrail → EventBridge → Lambda → DynamoDB
+Dashboard → DynamoDB Query → Analytics Chart Display
+```
+
+### Budget Control
+
+```
+Lambda (every 5 min) → DynamoDB Scan → On exceed → IAM Deny Policy + SNS Notification
+```
+
+---
+
+<a id="en-security-defense"></a>
+## Multi-Layer Security Defense
+
+```
+Layer 1: CloudFront          (HTTPS termination, DDoS protection)
+Layer 2: ALB                 (X-Custom-Secret header verification, Prefix List)
+Layer 3: Cognito             (OAuth 2.0 user authentication)
+Layer 4: Security Groups     (Network-level access control, 3-tier DLP)
+Layer 5: DNS Firewall        (Domain-based filtering, threat lists)
+Layer 6: IAM                 (Per-model Bedrock access control, per-user Task Role)
+Layer 7: DLP                 (code-server file upload/download restriction, extension control)
+```
+
+---
+
+<a id="en-task-definition"></a>
+## Task Definition Specifications
+
+| Task Definition | OS | vCPU | Memory | Use Case |
+|----------------|-----|------|--------|----------|
+| devenv-ubuntu-light | Ubuntu 24.04 | 1 | 4 GiB | Lightweight tasks, document editing |
+| devenv-ubuntu-standard | Ubuntu 24.04 | 2 | 8 GiB | General development (default) |
+| devenv-ubuntu-power | Ubuntu 24.04 | 4 | 12 GiB | Large builds, ML workloads |
+| devenv-al2023-light | Amazon Linux 2023 | 1 | 4 GiB | AWS-native lightweight tasks |
+| devenv-al2023-standard | Amazon Linux 2023 | 2 | 8 GiB | AWS-native general development |
+| devenv-al2023-power | Amazon Linux 2023 | 4 | 12 GiB | AWS-native large workloads |
+
+---
+
+<a id="en-dashboard-pages"></a>
+## Dashboard Page Structure
+
+| Page | Access Level | Key Features |
+|------|-------------|--------------|
+| Home | All users | Cost/token/user/container summary, cluster metrics |
+| AI Assistant | All users | Conversational AI based on Bedrock Converse API, AgentCore Memory |
+| Analytics | All users | Per-model usage, per-department cost, daily trends, user leaderboard |
+| Monitoring | admin | Container Insights (CPU/Memory/Network), ECS status |
+| Security | admin | IAM policies, DLP status, DNS Firewall rules, security checklist |
+| Users | admin | Cognito user CRUD, sorting/filtering, security policy assignment |
+| Containers | admin | ECS container start/stop, sorting/filtering, duplicate prevention |
