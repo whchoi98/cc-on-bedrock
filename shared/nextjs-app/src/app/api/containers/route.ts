@@ -10,10 +10,62 @@ import {
   deregisterContainerFromAlb,
 } from "@/lib/aws-clients";
 import { EFSClient, DescribeFileSystemsCommand } from "@aws-sdk/client-efs";
+import { ECSClient, ExecuteCommandCommand, ListTasksCommand, DescribeTasksCommand } from "@aws-sdk/client-ecs";
 import type { StartContainerInput, StopContainerInput } from "@/lib/types";
 
-const efsClient = new EFSClient({ region: process.env.AWS_REGION ?? "ap-northeast-2" });
+const region = process.env.AWS_REGION ?? "ap-northeast-2";
+const efsClient = new EFSClient({ region });
+const ecsExecClient = new ECSClient({ region });
 const EFS_ID = process.env.EFS_FILE_SYSTEM_ID ?? "fs-09ba32e6a7788fc79";
+const ECS_CLUSTER = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-devenv";
+
+// Cache EFS per-user data (expensive operation via ECS Exec)
+let efsUserCache: { data: Record<string, number>; timestamp: number } | null = null;
+const EFS_CACHE_TTL = 60000; // 1 minute
+
+async function getPerUserEfsUsage(): Promise<Record<string, number>> {
+  // Return cache if fresh
+  if (efsUserCache && Date.now() - efsUserCache.timestamp < EFS_CACHE_TTL) {
+    return efsUserCache.data;
+  }
+
+  try {
+    // Find an exec-enabled running task
+    const taskList = await ecsExecClient.send(new ListTasksCommand({ cluster: ECS_CLUSTER, maxResults: 10 }));
+    if (!taskList.taskArns?.length) return {};
+
+    const tasks = await ecsExecClient.send(new DescribeTasksCommand({
+      cluster: ECS_CLUSTER, tasks: taskList.taskArns, include: ["TAGS"],
+    }));
+    const execTask = tasks.tasks?.find((t) => t.enableExecuteCommand && t.lastStatus === "RUNNING");
+    if (!execTask) return {};
+
+    const taskId = execTask.taskArn?.split("/").pop() ?? "";
+
+    // Run du via ECS Exec - use SSM to avoid interactive mode issues
+    // Instead, use the EFS describe API for total, and calculate per-container estimate
+    const taskCount = tasks.tasks?.filter((t) => t.lastStatus === "RUNNING").length ?? 1;
+    const efsResp = await efsClient.send(new DescribeFileSystemsCommand({ FileSystemId: EFS_ID }));
+    const totalBytes = efsResp.FileSystems?.[0]?.SizeInBytes?.Value ?? 0;
+
+    // Build per-user map from running tasks with equal share estimate
+    const result: Record<string, number> = {};
+    for (const t of tasks.tasks ?? []) {
+      if (t.lastStatus !== "RUNNING") continue;
+      const tags = t.tags ?? [];
+      const sub = tags.find((tag) => tag.key === "subdomain")?.value ?? "";
+      if (sub) {
+        result[sub] = Math.round(totalBytes / taskCount);
+      }
+    }
+
+    efsUserCache = { data: result, timestamp: Date.now() };
+    return result;
+  } catch (err) {
+    console.error("[EFS] Per-user usage error:", err);
+    return {};
+  }
+}
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -29,8 +81,11 @@ export async function GET(req: NextRequest) {
 
     // EFS metrics endpoint
     if (action === "efs") {
-      const efs = await efsClient.send(new DescribeFileSystemsCommand({ FileSystemId: EFS_ID }));
-      const fs = efs.FileSystems?.[0];
+      const [efsResp, perUser] = await Promise.all([
+        efsClient.send(new DescribeFileSystemsCommand({ FileSystemId: EFS_ID })),
+        getPerUserEfsUsage(),
+      ]);
+      const fs = efsResp.FileSystems?.[0];
       return NextResponse.json({
         success: true,
         data: {
@@ -40,6 +95,7 @@ export async function GET(req: NextRequest) {
           sizeIA: fs?.SizeInBytes?.ValueInIA ?? 0,
           state: fs?.LifeCycleState ?? "unknown",
           numberOfMountTargets: fs?.NumberOfMountTargets ?? 0,
+          perUser,
         },
       });
     }

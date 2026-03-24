@@ -28,7 +28,7 @@ export default function ContainerManagement({
   const [starting, setStarting] = useState(false);
   const [selectedUser, setSelectedUser] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [efsInfo, setEfsInfo] = useState<{ sizeBytes: number; sizeStandard: number; sizeIA: number; state: string; numberOfMountTargets: number } | null>(null);
+  const [efsInfo, setEfsInfo] = useState<{ sizeBytes: number; sizeStandard: number; sizeIA: number; state: string; numberOfMountTargets: number; perUser?: Record<string, number> } | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -42,7 +42,7 @@ export default function ContainerManagement({
         ContainerInfo[]
       >;
       const usersJson = (await usersRes.json()) as ApiResponse<CognitoUser[]>;
-      const efsJson = (await efsRes.json()) as ApiResponse<{ sizeBytes: number; sizeStandard: number; sizeIA: number; state: string; numberOfMountTargets: number }>;
+      const efsJson = (await efsRes.json()) as ApiResponse<{ sizeBytes: number; sizeStandard: number; sizeIA: number; state: string; numberOfMountTargets: number; perUser?: Record<string, number> }>;
 
       setContainers(containersJson.data ?? []);
       setUsers(usersJson.data ?? []);
@@ -196,6 +196,32 @@ export default function ContainerManagement({
             </div>
           </div>
           <p className="mt-3 text-[10px] text-gray-600">Path: /home/coder/users/&#123;subdomain&#125;/ · Per-user isolation enabled · Transit encryption: ON</p>
+
+          {/* Per-user EFS Usage */}
+          {efsInfo.perUser && Object.keys(efsInfo.perUser).length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-800">
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Per-User Storage (estimated)</p>
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto">
+                {Object.entries(efsInfo.perUser)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([subdomain, bytes]) => {
+                    const mb = bytes / (1024 * 1024);
+                    const pct = efsInfo.sizeBytes > 0 ? (bytes / efsInfo.sizeBytes) * 100 : 0;
+                    const isRunning = runningContainers.some((c) => c.subdomain === subdomain);
+                    return (
+                      <div key={subdomain} className="flex items-center gap-2 py-1">
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isRunning ? "bg-green-400" : "bg-gray-600"}`} />
+                        <span className="text-[11px] text-gray-300 w-16 truncate">{subdomain}</span>
+                        <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden max-w-[100px]">
+                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.min(pct, 100)}%` }} />
+                        </div>
+                        <span className="text-[10px] text-gray-500 w-14 text-right">{mb >= 1024 ? `${(mb / 1024).toFixed(1)} GiB` : `${mb.toFixed(0)} MiB`}</span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
