@@ -24,7 +24,6 @@ export interface DashboardStackProps extends cdk.StackProps {
   cloudfrontSecret: secretsmanager.Secret;
   userPool: cognito.UserPool;
   userPoolClient: cognito.UserPoolClient;
-  litellmAlbDns: string;
 }
 
 export class DashboardStack extends cdk.Stack {
@@ -33,7 +32,7 @@ export class DashboardStack extends cdk.Stack {
 
     const { config, vpc, encryptionKey, dashboardEc2Role,
             dashboardCertificateArn, hostedZone, cloudfrontSecret,
-            userPool, userPoolClient, litellmAlbDns } = props;
+            userPool, userPoolClient } = props;
 
     // Dashboard EC2 Role - additional permissions for all dashboard features
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
@@ -130,7 +129,6 @@ export class DashboardStack extends cdk.Stack {
         'rm /tmp/dashboard-app.tar.gz',
         '',
         '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
-        'LITELLM_KEY=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/litellm-master-key --region ap-northeast-2 --query SecretString --output text 2>/dev/null || echo "")',
         'NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ap-northeast-2 --query SecretString --output text 2>/dev/null || openssl rand -hex 32)',
         '',
         '# Environment config',
@@ -139,8 +137,6 @@ export class DashboardStack extends cdk.Stack {
         'NEXTAUTH_SECRET=$NEXTAUTH_SECRET_VAL',
         `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
         `COGNITO_ISSUER=https://cognito-idp.ap-northeast-2.amazonaws.com/${userPool.userPoolId}`,
-        `LITELLM_API_URL=http://${litellmAlbDns}:4000`,
-        'LITELLM_MASTER_KEY=$LITELLM_KEY',
         'AWS_REGION=ap-northeast-2',
         'ECS_CLUSTER_NAME=cc-on-bedrock-devenv',
         `COGNITO_USER_POOL_ID=${userPool.userPoolId}`,

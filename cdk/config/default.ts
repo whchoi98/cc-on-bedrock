@@ -17,11 +17,9 @@ export interface CcOnBedrockConfig {
   opusModelId: string;
   sonnetModelId: string;
 
-  // Compute
-  litellmInstanceType: string;
+  // Compute (LiteLLM removed - direct Bedrock access)
   ecsHostInstanceType: string;
   dashboardInstanceType: string;
-  rdsInstanceType: string;
 }
 
 export const defaultConfig: CcOnBedrockConfig = {
@@ -37,8 +35,6 @@ export const defaultConfig: CcOnBedrockConfig = {
   devSubdomain: 'dev',
   opusModelId: 'global.anthropic.claude-opus-4-6-v1[1m]',
   sonnetModelId: 'global.anthropic.claude-sonnet-4-6[1m]',
-  litellmInstanceType: 't4g.xlarge',
   ecsHostInstanceType: 'm7g.4xlarge',
   dashboardInstanceType: 't4g.xlarge',
-  rdsInstanceType: 'db.t4g.medium',
 };

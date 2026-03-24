@@ -79,6 +79,33 @@ const ko: Record<string, string> = {
   "overview.totalRequests": "총 API 요청 수",
   "overview.activeUsers": "활성 사용자 수",
   "overview.avgLatency": "평균 응답시간 (ms)",
+  "overview.deptCount": "부서 수",
+
+  // Department Analysis
+  "dept.title": "부서별 분석",
+  "dept.filterLabel": "부서",
+  "dept.totalDepts": "총 부서 수",
+  "dept.totalDeptsDesc": "활성 부서",
+  "dept.topByCost": "비용 최다 부서",
+  "dept.topByTokens": "토큰 최다 부서",
+  "dept.topByUsers": "인원 최다 부서",
+  "dept.users": "명",
+  "dept.costByDept": "부서별 비용 (USD)",
+  "dept.requestsByDept": "부서별 요청 수",
+  "dept.tokenDistribution": "부서별 토큰 분포",
+  "dept.totalTokensLabel": "총 토큰",
+
+  // User x Department Insights
+  "userDept.title": "사용자 × 부서 인사이트",
+  "userDept.tableTitle": "사용자별 부서/모델/토큰/비용 상세",
+  "userDept.user": "사용자",
+  "userDept.department": "부서",
+  "userDept.modelsUsed": "사용 모델",
+  "userDept.requests": "요청 수",
+  "userDept.inputTokens": "Input 토큰",
+  "userDept.outputTokens": "Output 토큰",
+  "userDept.totalCost": "총 비용",
+  "userDept.avgTokensPerReq": "평균 토큰/요청",
 
   // Insights
   "insights.title": "Insights & 비용 분석",
@@ -97,18 +124,10 @@ const ko: Record<string, string> = {
 
   // System Health
   "system.title": "시스템 상태",
-  "system.proxyStatus": "Proxy Status",
-  "system.database": "Database",
-  "system.cache": "Cache (Valkey)",
-  "system.version": "LiteLLM Version",
-
-  // Key Budget
-  "keyBudget.title": "API Key 예산 관리",
-  "keyBudget.alias": "Key Alias",
-  "keyBudget.spend": "사용량",
-  "keyBudget.limit": "한도",
-  "keyBudget.usage": "사용률",
-  "keyBudget.lastActive": "마지막 활동",
+  "system.bedrockStatus": "Bedrock API",
+  "system.database": "사용량 추적 (DynamoDB)",
+  "system.architecture": "아키텍처",
+  "system.version": "Direct Bedrock",
 
   // Bedrock Model
   "bedrockModel.title": "Bedrock 모델 상세",
@@ -141,10 +160,13 @@ const ko: Record<string, string> = {
   "modelPerf.title": "모델 성능",
   "modelPerf.latency": "모델별 평균 응답시간 (ms)",
   "modelPerf.userCost": "사용자별 비용 TOP 10 (USD)",
+  "modelPerf.usageDistribution": "모델 사용 분포",
+  "modelPerf.totalRequests": "총 요청",
+  "modelPerf.summaryTable": "모델별 요청/토큰/비용 요약",
 
   // Monitoring
   "monitoring.title": "운영 모니터링",
-  "monitoring.subtitle": "프록시 상태, ECS 현황, 활성 세션, 에러율",
+  "monitoring.subtitle": "Bedrock 상태, ECS 현황, 활성 세션, 리소스 사용",
   "monitoring.serviceHealth": "서비스 상태",
   "monitoring.resourceInsights": "리소스 인사이트",
   "monitoring.containerDist": "컨테이너 분포",
@@ -205,6 +227,42 @@ const ko: Record<string, string> = {
   "userModel.avgTokens": "평균 토큰",
   "userModel.primaryModel": "주 모델",
 
+  // Request Analysis
+  "requestAnalysis.title": "요청 분석",
+  "requestAnalysis.successRate": "요청 성공률",
+  "requestAnalysis.successLabel": "성공률",
+  "requestAnalysis.callTypes": "호출 유형 분포",
+  "requestAnalysis.typesLabel": "유형",
+  "requestAnalysis.tokenRatio": "토큰 Input/Output 비율",
+
+  // Hourly Activity
+  "hourlyActivity.title": "시간대별 활동 패턴",
+  "hourlyActivity.distribution": "시간대별 요청 분포",
+  "hourlyActivity.peakHour": "피크 시간",
+  "hourlyActivity.requests": "요청",
+  "hourlyActivity.avgPerHour": "시간당 평균",
+  "hourlyActivity.requestsPerHour": "요청/시간",
+  "hourlyActivity.activeHours": "활성 시간대",
+  "hourlyActivity.hours": "시간",
+
+  // Tool Acceptance
+  "toolAcceptance.title": "도구 수락률 & 개발자 참여도",
+  "toolAcceptance.overallRate": "전체 수락률",
+  "toolAcceptance.overallRateDesc": "성공 요청 비율",
+  "toolAcceptance.avgSessionDepth": "평균 세션 깊이",
+  "toolAcceptance.avgSessionDepthDesc": "세션당 평균 API 호출",
+  "toolAcceptance.totalSessions": "총 세션 수",
+  "toolAcceptance.totalSessionsDesc": "사용자별 일별 세션",
+  "toolAcceptance.activeDevs": "활성 개발자",
+  "toolAcceptance.activeDevsDesc": "기간 내 사용자",
+  "toolAcceptance.perUser": "사용자별 참여도 상세",
+  "toolAcceptance.user": "사용자",
+  "toolAcceptance.sessions": "세션",
+  "toolAcceptance.totalReqs": "총 요청",
+  "toolAcceptance.sessionDepth": "세션 깊이",
+  "toolAcceptance.tokensPerSession": "세션당 토큰",
+  "toolAcceptance.acceptRate": "수락률",
+
   // Home
   "home.title": "CC-on-Bedrock",
   "home.subtitle": "AWS Bedrock 기반 멀티유저 Claude Code 개발환경",
@@ -212,10 +270,10 @@ const ko: Record<string, string> = {
   "home.totalRequests": "총 요청",
   "home.activeUsers": "활성 사용자",
   "home.runningContainers": "실행 컨테이너",
-  "home.proxyStatus": "프록시 상태",
-  "home.cacheStatus": "캐시 상태",
-  "home.dbStatus": "DB 상태",
-  "home.modelCount": "등록 모델",
+  "home.bedrockStatus": "Bedrock 상태",
+  "home.usageTracking": "사용량 추적",
+  "home.architecture": "아키텍처",
+  "home.modelCount": "활성 모델",
   "home.quickActions": "빠른 작업",
   "home.viewAnalytics": "분석 대시보드",
   "home.viewMonitoring": "모니터링",
@@ -260,6 +318,33 @@ const en: Record<string, string> = {
   "overview.totalRequests": "Total API Requests",
   "overview.activeUsers": "Active Users",
   "overview.avgLatency": "Avg Latency (ms)",
+  "overview.deptCount": "Departments",
+
+  // Department Analysis
+  "dept.title": "Department Analysis",
+  "dept.filterLabel": "Department",
+  "dept.totalDepts": "Total Departments",
+  "dept.totalDeptsDesc": "Active departments",
+  "dept.topByCost": "Top Dept by Cost",
+  "dept.topByTokens": "Top Dept by Tokens",
+  "dept.topByUsers": "Dept with Most Users",
+  "dept.users": "users",
+  "dept.costByDept": "Cost by Department (USD)",
+  "dept.requestsByDept": "Requests by Department",
+  "dept.tokenDistribution": "Token Distribution by Department",
+  "dept.totalTokensLabel": "Total Tokens",
+
+  // User x Department Insights
+  "userDept.title": "User x Department Insights",
+  "userDept.tableTitle": "Per-User Department / Model / Token / Cost Details",
+  "userDept.user": "User",
+  "userDept.department": "Department",
+  "userDept.modelsUsed": "Models Used",
+  "userDept.requests": "Requests",
+  "userDept.inputTokens": "Input Tokens",
+  "userDept.outputTokens": "Output Tokens",
+  "userDept.totalCost": "Total Cost",
+  "userDept.avgTokensPerReq": "Avg Tokens/Req",
 
   // Insights
   "insights.title": "Insights & Cost Analysis",
@@ -278,18 +363,10 @@ const en: Record<string, string> = {
 
   // System Health
   "system.title": "System Health",
-  "system.proxyStatus": "Proxy Status",
-  "system.database": "Database",
-  "system.cache": "Cache (Valkey)",
-  "system.version": "LiteLLM Version",
-
-  // Key Budget
-  "keyBudget.title": "API Key Budget Management",
-  "keyBudget.alias": "Key Alias",
-  "keyBudget.spend": "Spend",
-  "keyBudget.limit": "Limit",
-  "keyBudget.usage": "Usage",
-  "keyBudget.lastActive": "Last Active",
+  "system.bedrockStatus": "Bedrock API",
+  "system.database": "Usage Tracking (DynamoDB)",
+  "system.architecture": "Architecture",
+  "system.version": "Direct Bedrock",
 
   // Bedrock Model
   "bedrockModel.title": "Bedrock Model Details",
@@ -322,10 +399,13 @@ const en: Record<string, string> = {
   "modelPerf.title": "Model Performance",
   "modelPerf.latency": "Avg Latency by Model (ms)",
   "modelPerf.userCost": "Cost by User TOP 10 (USD)",
+  "modelPerf.usageDistribution": "Model Usage Distribution",
+  "modelPerf.totalRequests": "Total Requests",
+  "modelPerf.summaryTable": "Model Request/Token/Cost Summary",
 
   // Monitoring
   "monitoring.title": "Operations Monitoring",
-  "monitoring.subtitle": "Proxy health, ECS status, active sessions, error rates",
+  "monitoring.subtitle": "Bedrock health, ECS status, active sessions, resource usage",
   "monitoring.serviceHealth": "Service Health",
   "monitoring.resourceInsights": "Resource Insights",
   "monitoring.containerDist": "Container Distribution",
@@ -373,8 +453,8 @@ const en: Record<string, string> = {
   "containers.cancel": "Cancel",
 
   // User Model Insights
-  "userModel.title": "User × Model Usage Insights",
-  "userModel.matrix": "User × Model Matrix",
+  "userModel.title": "User x Model Usage Insights",
+  "userModel.matrix": "User x Model Matrix",
   "userModel.preference": "Model Preference Distribution",
   "userModel.topByModel": "Top Users by Model",
   "userModel.costByModel": "Cost by User & Model",
@@ -386,6 +466,42 @@ const en: Record<string, string> = {
   "userModel.avgTokens": "Avg Tokens",
   "userModel.primaryModel": "Primary Model",
 
+  // Request Analysis
+  "requestAnalysis.title": "Request Analysis",
+  "requestAnalysis.successRate": "Request Success Rate",
+  "requestAnalysis.successLabel": "Success",
+  "requestAnalysis.callTypes": "Call Type Distribution",
+  "requestAnalysis.typesLabel": "Types",
+  "requestAnalysis.tokenRatio": "Token Input/Output Ratio",
+
+  // Hourly Activity
+  "hourlyActivity.title": "Hourly Activity Patterns",
+  "hourlyActivity.distribution": "Request Distribution by Hour",
+  "hourlyActivity.peakHour": "Peak Hour",
+  "hourlyActivity.requests": "requests",
+  "hourlyActivity.avgPerHour": "Avg per Hour",
+  "hourlyActivity.requestsPerHour": "requests/hour",
+  "hourlyActivity.activeHours": "Active Hours",
+  "hourlyActivity.hours": "hours",
+
+  // Tool Acceptance
+  "toolAcceptance.title": "Tool Acceptance & Developer Engagement",
+  "toolAcceptance.overallRate": "Overall Acceptance Rate",
+  "toolAcceptance.overallRateDesc": "Successful request ratio",
+  "toolAcceptance.avgSessionDepth": "Avg Session Depth",
+  "toolAcceptance.avgSessionDepthDesc": "Avg API calls per session",
+  "toolAcceptance.totalSessions": "Total Sessions",
+  "toolAcceptance.totalSessionsDesc": "User x day sessions",
+  "toolAcceptance.activeDevs": "Active Developers",
+  "toolAcceptance.activeDevsDesc": "Users in period",
+  "toolAcceptance.perUser": "Per-User Engagement Details",
+  "toolAcceptance.user": "User",
+  "toolAcceptance.sessions": "Sessions",
+  "toolAcceptance.totalReqs": "Total Reqs",
+  "toolAcceptance.sessionDepth": "Session Depth",
+  "toolAcceptance.tokensPerSession": "Tokens/Session",
+  "toolAcceptance.acceptRate": "Accept Rate",
+
   // Home
   "home.title": "CC-on-Bedrock",
   "home.subtitle": "Multi-user Claude Code Dev Environment on AWS Bedrock",
@@ -393,10 +509,10 @@ const en: Record<string, string> = {
   "home.totalRequests": "Total Requests",
   "home.activeUsers": "Active Users",
   "home.runningContainers": "Running Containers",
-  "home.proxyStatus": "Proxy Status",
-  "home.cacheStatus": "Cache Status",
-  "home.dbStatus": "DB Status",
-  "home.modelCount": "Models",
+  "home.bedrockStatus": "Bedrock Status",
+  "home.usageTracking": "Usage Tracking",
+  "home.architecture": "Architecture",
+  "home.modelCount": "Active Models",
   "home.quickActions": "Quick Actions",
   "home.viewAnalytics": "Analytics Dashboard",
   "home.viewMonitoring": "Monitoring",

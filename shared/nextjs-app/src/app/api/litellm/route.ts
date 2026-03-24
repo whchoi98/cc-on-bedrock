@@ -1,19 +1,18 @@
+/**
+ * Usage Analytics API Route (replaces LiteLLM API)
+ * Data source: DynamoDB (cc-on-bedrock-usage) populated by Bedrock Invocation Logging
+ */
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import {
-  getSpendLogs,
-  getModelMetrics,
-  getSpendPerDay,
-  getTotalSpend,
-  generateKey,
-  listKeys,
-  deleteKey,
-  updateKey,
-  getKeySpendList,
-  getSystemHealth,
-  getModelCount,
-} from "@/lib/litellm-client";
+  getUsageRecords,
+  getUserSummaries,
+  getDepartmentSummaries,
+  getModelSummaries,
+  getDailyUsage,
+  getTotalUsage,
+} from "@/lib/usage-client";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -30,153 +29,113 @@ export async function GET(req: NextRequest) {
   try {
     switch (action) {
       case "spend_logs": {
-        // Non-admin users can only see their own spend
-        const effectiveUserId = session.user.isAdmin
-          ? userId
-          : session.user.id;
-        const logs = await getSpendLogs({
-          user_id: effectiveUserId,
-          start_date: startDate,
-          end_date: endDate,
+        // Compatible with old LiteLLM format for analytics dashboard
+        const effectiveUserId = session.user.isAdmin ? userId : session.user.id;
+        const records = await getUsageRecords({
+          startDate,
+          endDate,
+          userId: effectiveUserId,
         });
-        return NextResponse.json({ success: true, data: logs });
+        // Map to SpendLog-compatible format
+        const data = records.map((r) => ({
+          request_id: `${r.userId}-${r.date}-${r.model}`,
+          api_key: r.userId,
+          model: r.model,
+          call_type: "chat",
+          spend: r.estimatedCost,
+          total_tokens: r.totalTokens,
+          prompt_tokens: r.inputTokens,
+          completion_tokens: r.outputTokens,
+          startTime: `${r.date}T00:00:00Z`,
+          endTime: `${r.date}T23:59:59Z`,
+          user: r.userId,
+          department: r.department,
+          status: "success",
+        }));
+        return NextResponse.json({ success: true, data });
       }
 
       case "model_metrics": {
         if (!session.user.isAdmin) {
-          return NextResponse.json(
-            { error: "Admin access required" },
-            { status: 403 }
-          );
+          return NextResponse.json({ error: "Admin access required" }, { status: 403 });
         }
-        const metrics = await getModelMetrics({
-          start_date: startDate,
-          end_date: endDate,
-        });
-        return NextResponse.json({ success: true, data: metrics });
+        const models = await getModelSummaries({ startDate, endDate });
+        const data = models.map((m) => ({
+          model: m.model,
+          num_requests: m.requests,
+          total_tokens: m.totalTokens,
+          avg_latency_seconds: m.avgLatencyMs / 1000,
+          total_spend: m.totalCost,
+        }));
+        return NextResponse.json({ success: true, data });
       }
 
       case "spend_per_day": {
-        const effectiveUserId = session.user.isAdmin
-          ? userId
-          : session.user.id;
-        const spend = await getSpendPerDay({
-          start_date: startDate,
-          end_date: endDate,
-          user_id: effectiveUserId,
-        });
-        return NextResponse.json({ success: true, data: spend });
+        const effectiveUserId = session.user.isAdmin ? userId : session.user.id;
+        const daily = await getDailyUsage({ startDate, endDate, userId: effectiveUserId });
+        return NextResponse.json({ success: true, data: daily });
       }
 
       case "total_spend": {
         if (!session.user.isAdmin) {
-          return NextResponse.json(
-            { error: "Admin access required" },
-            { status: 403 }
-          );
+          return NextResponse.json({ error: "Admin access required" }, { status: 403 });
         }
-        const total = await getTotalSpend();
+        const total = await getTotalUsage();
         return NextResponse.json({ success: true, data: total });
       }
 
-      case "list_keys": {
+      case "user_summaries": {
         if (!session.user.isAdmin) {
-          return NextResponse.json(
-            { error: "Admin access required" },
-            { status: 403 }
-          );
+          return NextResponse.json({ error: "Admin access required" }, { status: 403 });
         }
-        const keys = await listKeys();
-        return NextResponse.json({ success: true, data: keys });
+        const users = await getUserSummaries({ startDate, endDate });
+        return NextResponse.json({ success: true, data: users });
       }
 
-      case "key_spend_list": {
+      case "department_summaries": {
         if (!session.user.isAdmin) {
-          return NextResponse.json(
-            { error: "Admin access required" },
-            { status: 403 }
-          );
+          return NextResponse.json({ error: "Admin access required" }, { status: 403 });
         }
-        const keySpend = await getKeySpendList();
-        return NextResponse.json({ success: true, data: keySpend });
+        const depts = await getDepartmentSummaries({ startDate, endDate });
+        return NextResponse.json({ success: true, data: depts });
       }
 
       case "system_health": {
         if (!session.user.isAdmin) {
-          return NextResponse.json(
-            { error: "Admin access required" },
-            { status: 403 }
-          );
+          return NextResponse.json({ error: "Admin access required" }, { status: 403 });
         }
-        const [health, modelCount] = await Promise.all([
-          getSystemHealth(),
-          getModelCount(),
-        ]);
+        // Direct Bedrock mode - no proxy health to check
         return NextResponse.json({
           success: true,
-          data: { ...health, model_count: modelCount },
+          data: {
+            status: "healthy",
+            db: "dynamodb",
+            cache: "none",
+            litellm_version: "removed",
+            model_count: 0,
+            architecture: "Direct Bedrock",
+          },
         });
       }
 
+      // Legacy compatibility: key_spend_list returns empty (no API keys in direct mode)
+      case "key_spend_list":
+      case "list_keys":
+        return NextResponse.json({ success: true, data: [] });
+
       default:
-        return NextResponse.json(
-          { error: "Invalid action" },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }
   } catch (err) {
-    console.error("[litellm] GET", err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      { success: false, error: "Internal server error" },
-      { status: 500 }
-    );
+    console.error("[usage] GET", err instanceof Error ? err.message : err);
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }
 
+// POST is no longer needed (no API key management in direct Bedrock mode)
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.isAdmin) {
-    return NextResponse.json(
-      { error: "Admin access required" },
-      { status: 403 }
-    );
-  }
-
-  const body = await req.json();
-  const { action, ...params } = body as { action: string; [key: string]: unknown };
-
-  try {
-    switch (action) {
-      case "generate_key": {
-        const key = await generateKey(
-          params as Parameters<typeof generateKey>[0]
-        );
-        return NextResponse.json({ success: true, data: key });
-      }
-
-      case "delete_key": {
-        await deleteKey(params.key as string);
-        return NextResponse.json({ success: true });
-      }
-
-      case "update_key": {
-        const updated = await updateKey(
-          params as Parameters<typeof updateKey>[0]
-        );
-        return NextResponse.json({ success: true, data: updated });
-      }
-
-      default:
-        return NextResponse.json(
-          { error: "Invalid action" },
-          { status: 400 }
-        );
-    }
-  } catch (err) {
-    console.error("[litellm] POST", err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      { success: false, error: "Internal server error" },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json(
+    { error: "API key management removed. Using direct Bedrock access with Task Roles." },
+    { status: 410 }
+  );
 }

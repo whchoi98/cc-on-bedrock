@@ -3,7 +3,7 @@ import * as cdk from 'aws-cdk-lib';
 import { defaultConfig } from '../config/default';
 import { NetworkStack } from '../lib/01-network-stack';
 import { SecurityStack } from '../lib/02-security-stack';
-import { LitellmStack } from '../lib/03-litellm-stack';
+import { UsageTrackingStack } from '../lib/03-usage-tracking-stack';
 import { EcsDevenvStack } from '../lib/04-ecs-devenv-stack';
 import { DashboardStack } from '../lib/05-dashboard-stack';
 
@@ -43,30 +43,25 @@ const securityStack = new SecurityStack(app, 'CcOnBedrock-Security', {
 });
 securityStack.addDependency(networkStack);
 
-// Stack 03: LiteLLM
-const litellmStack = new LitellmStack(app, 'CcOnBedrock-LiteLLM', {
+// Stack 03: Usage Tracking (replaces LiteLLM for spend/token analytics)
+const usageTrackingStack = new UsageTrackingStack(app, 'CcOnBedrock-UsageTracking', {
   env, config,
-  vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
-  litellmEc2Role: securityStack.litellmEc2Role,
-  litellmMasterKeySecret: securityStack.litellmMasterKeySecret,
-  valkeyAuthSecret: securityStack.valkeyAuthSecret,
-  description: 'CC-on-Bedrock: LiteLLM Proxy, RDS, Serverless Valkey',
+  description: 'CC-on-Bedrock: DynamoDB usage tracking, EventBridge, Lambda',
 });
-litellmStack.addDependency(securityStack);
+usageTrackingStack.addDependency(securityStack);
 
 // Stack 04: ECS Dev Environment
 const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   env, config,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
-  litellmAlbDns: litellmStack.internalAlb.loadBalancerDnsName,
   devEnvCertificateArn: app.node.tryGetContext('devEnvCertArn'),
   hostedZone: networkStack.hostedZone,
   cloudfrontSecret: securityStack.cloudfrontSecret,
   description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
 });
-ecsDevenvStack.addDependency(litellmStack);
+ecsDevenvStack.addDependency(securityStack);
 
 // Stack 05: Dashboard
 const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
@@ -79,7 +74,6 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   cloudfrontSecret: securityStack.cloudfrontSecret,
   userPool: securityStack.userPool,
   userPoolClient: securityStack.userPoolClient,
-  litellmAlbDns: litellmStack.internalAlb.loadBalancerDnsName,
   description: 'CC-on-Bedrock: Next.js Dashboard, ALB, CloudFront',
 });
 dashboardStack.addDependency(ecsDevenvStack);

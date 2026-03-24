@@ -17,6 +17,17 @@ import {
   DescribeTasksCommand,
   ListTasksCommand,
 } from "@aws-sdk/client-ecs";
+import {
+  ElasticLoadBalancingV2Client,
+  CreateTargetGroupCommand,
+  RegisterTargetsCommand,
+  DeregisterTargetsCommand,
+  CreateRuleCommand,
+  DeleteRuleCommand,
+  DescribeTargetGroupsCommand,
+  DescribeRulesCommand,
+  DeleteTargetGroupCommand,
+} from "@aws-sdk/client-elastic-load-balancing-v2";
 import type {
   CognitoUser,
   CreateUserInput,
@@ -34,6 +45,10 @@ const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
+const elbv2Client = new ElasticLoadBalancingV2Client({ region });
+
+const devenvAlbListenerArn = process.env.DEVENV_ALB_LISTENER_ARN ?? "";
+const vpcId = process.env.VPC_ID ?? "";
 
 // ─── Helper: Parse Cognito attributes ───
 
@@ -59,6 +74,7 @@ function toCognitoUser(user: {
     status: user.UserStatus ?? "UNKNOWN",
     createdAt: user.UserCreateDate?.toISOString() ?? "",
     subdomain: getAttr(attrs, "custom:subdomain") ?? "",
+    department: getAttr(attrs, "custom:department") ?? "default",
     containerOs: (getAttr(attrs, "custom:container_os") as CognitoUser["containerOs"]) ?? "ubuntu",
     resourceTier: (getAttr(attrs, "custom:resource_tier") as CognitoUser["resourceTier"]) ?? "standard",
     securityPolicy: (getAttr(attrs, "custom:security_policy") as CognitoUser["securityPolicy"]) ?? "restricted",
@@ -107,6 +123,7 @@ export async function createCognitoUser(
         { Name: "email", Value: input.email },
         { Name: "email_verified", Value: "true" },
         { Name: "custom:subdomain", Value: input.subdomain },
+        { Name: "custom:department", Value: input.department },
         { Name: "custom:container_os", Value: input.containerOs },
         { Name: "custom:resource_tier", Value: input.resourceTier },
         { Name: "custom:security_policy", Value: input.securityPolicy },
@@ -225,8 +242,20 @@ export async function startContainer(
     throw new Error(`Invalid container config: ${taskDefKey}`);
   }
 
+  // Duplicate check: prevent multiple containers for the same user
+  const existing = await listContainers();
+  const userContainers = existing.filter(
+    (c) =>
+      (c.username === input.username || c.subdomain === input.subdomain) &&
+      (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
+  );
+  if (userContainers.length > 0) {
+    throw new Error(
+      `User "${input.username}" already has a running container (${userContainers[0].taskId}). Stop it first.`
+    );
+  }
+
   const securityGroup = SECURITY_GROUP_MAP[input.securityPolicy];
-  const litellmUrl = process.env.LITELLM_API_URL ?? "";
 
   const result = await ecsClient.send(
     new RunTaskCommand({
@@ -246,10 +275,10 @@ export async function startContainer(
           {
             name: "devenv",
             environment: [
-              { name: "ANTHROPIC_BASE_URL", value: litellmUrl },
-              { name: "ANTHROPIC_API_KEY", value: input.litellmApiKey },
+              // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
+              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? "CcOnBedrock2026!" },
               { name: "AWS_DEFAULT_REGION", value: region },
             ],
           },
@@ -258,6 +287,7 @@ export async function startContainer(
       tags: [
         { key: "username", value: input.username },
         { key: "subdomain", value: input.subdomain },
+        { key: "department", value: input.department },
         { key: "domain", value: `${input.subdomain}.${devSubdomain}.${domainName}` },
       ],
     })
@@ -392,4 +422,109 @@ export async function describeContainer(
         ?.details?.find((d) => d.name === "privateIPv4Address")?.value ??
       undefined,
   };
+}
+
+// ─── ALB Target Auto-Registration ───
+
+export async function registerContainerInAlb(
+  subdomain: string,
+  privateIp: string
+): Promise<void> {
+  if (!devenvAlbListenerArn || !vpcId) {
+    console.warn("[ALB] Missing DEVENV_ALB_LISTENER_ARN or VPC_ID");
+    return;
+  }
+
+  const tgName = `devenv-${subdomain}`;
+
+  // Check if target group exists
+  let tgArn: string | undefined;
+  try {
+    const existing = await elbv2Client.send(
+      new DescribeTargetGroupsCommand({ Names: [tgName] })
+    );
+    tgArn = existing.TargetGroups?.[0]?.TargetGroupArn;
+  } catch {
+    // Target group doesn't exist, create it
+  }
+
+  if (!tgArn) {
+    const createResult = await elbv2Client.send(
+      new CreateTargetGroupCommand({
+        Name: tgName,
+        Protocol: "HTTP",
+        Port: 8080,
+        VpcId: vpcId,
+        TargetType: "ip",
+        HealthCheckPath: "/",
+        HealthCheckIntervalSeconds: 30,
+        HealthyThresholdCount: 2,
+        UnhealthyThresholdCount: 3,
+      })
+    );
+    tgArn = createResult.TargetGroups?.[0]?.TargetGroupArn;
+    if (!tgArn) throw new Error("Failed to create target group");
+
+    // Find next available priority
+    const rules = await elbv2Client.send(
+      new DescribeRulesCommand({ ListenerArn: devenvAlbListenerArn })
+    );
+    const usedPriorities = (rules.Rules ?? [])
+      .map((r) => parseInt(r.Priority ?? "0", 10))
+      .filter((p) => !isNaN(p));
+    const nextPriority = Math.max(...usedPriorities, 0) + 1;
+
+    // Create listener rule
+    await elbv2Client.send(
+      new CreateRuleCommand({
+        ListenerArn: devenvAlbListenerArn,
+        Priority: nextPriority,
+        Conditions: [
+          { Field: "host-header", Values: [`${subdomain}.${devSubdomain}.${domainName}`] },
+        ],
+        Actions: [{ Type: "forward", TargetGroupArn: tgArn }],
+      })
+    );
+  }
+
+  // Register the container IP
+  await elbv2Client.send(
+    new RegisterTargetsCommand({
+      TargetGroupArn: tgArn,
+      Targets: [{ Id: privateIp, Port: 8080 }],
+    })
+  );
+
+  console.log(`[ALB] Registered ${subdomain} → ${privateIp}:8080`);
+}
+
+export async function deregisterContainerFromAlb(
+  subdomain: string
+): Promise<void> {
+  try {
+    const tgName = `devenv-${subdomain}`;
+    const existing = await elbv2Client.send(
+      new DescribeTargetGroupsCommand({ Names: [tgName] })
+    );
+    const tgArn = existing.TargetGroups?.[0]?.TargetGroupArn;
+    if (!tgArn) return;
+
+    // Find and delete the listener rule
+    if (devenvAlbListenerArn) {
+      const rules = await elbv2Client.send(
+        new DescribeRulesCommand({ ListenerArn: devenvAlbListenerArn })
+      );
+      for (const rule of rules.Rules ?? []) {
+        if (rule.Actions?.some((a) => a.TargetGroupArn === tgArn) && !rule.IsDefault) {
+          await elbv2Client.send(new DeleteRuleCommand({ RuleArn: rule.RuleArn }));
+        }
+      }
+    }
+
+    // Delete target group
+    await elbv2Client.send(new DeleteTargetGroupCommand({ TargetGroupArn: tgArn }));
+    console.log(`[ALB] Deregistered ${subdomain}`);
+  } catch (err) {
+    console.warn(`[ALB] Deregister ${subdomain} failed:`, err);
+  }
 }

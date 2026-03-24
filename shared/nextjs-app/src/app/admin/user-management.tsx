@@ -52,6 +52,7 @@ export default function UserManagement() {
         body: JSON.stringify({
           email,
           subdomain,
+          department: "default",
           containerOs,
           resourceTier,
           securityPolicy,
@@ -78,7 +79,7 @@ export default function UserManagement() {
   };
 
   const handleDelete = async (username: string) => {
-    if (!confirm(`Are you sure you want to delete user "${username}"? This will also remove their LiteLLM API key.`)) {
+    if (!confirm(`Are you sure you want to delete user "${username}"? This will also remove their Bedrock access.`)) {
       return;
     }
     try {

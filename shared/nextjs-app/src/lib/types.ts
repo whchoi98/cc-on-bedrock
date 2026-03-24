@@ -21,6 +21,7 @@ export interface CognitoUser {
   status: string;
   createdAt: string;
   subdomain: string;
+  department: string;
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
@@ -32,6 +33,7 @@ export interface CognitoUser {
 export interface CreateUserInput {
   email: string;
   subdomain: string;
+  department: string;
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
@@ -122,10 +124,43 @@ export interface ContainerInfo {
 export interface StartContainerInput {
   username: string;
   subdomain: string;
+  department: string;
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
-  litellmApiKey: string;
+}
+
+// ─── Usage Tracking Types (CloudTrail → DynamoDB) ───
+
+export interface UsageRecord {
+  userId: string;
+  department: string;
+  date: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requests: number;
+  estimatedCost: number;
+}
+
+export interface DepartmentUsage {
+  department: string;
+  users: number;
+  totalTokens: number;
+  totalCost: number;
+  requests: number;
+}
+
+export interface UserUsage {
+  userId: string;
+  department: string;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalCost: number;
+  requests: number;
+  lastActive: string;
 }
 
 export interface StopContainerInput {

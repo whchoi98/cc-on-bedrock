@@ -17,6 +17,9 @@ export class SecurityStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly encryptionKey: kms.Key;
+  // TODO: Remove litellmMasterKeySecret, valkeyAuthSecret, and litellmEc2Role
+  // once the CcOnBedrock-LiteLLM CloudFormation stack is fully deleted.
+  // These are retained to avoid breaking the existing deployed stack dependency.
   public readonly litellmMasterKeySecret: secretsmanager.Secret;
 
   public readonly cloudfrontSecret: secretsmanager.Secret;
@@ -60,13 +63,19 @@ export class SecurityStack extends cdk.Stack {
       },
     });
 
+    // Cognito Hosted UI domain for OAuth login
+    this.userPool.addDomain('CognitoDomain', {
+      cognitoDomain: { domainPrefix: 'cc-on-bedrock' },
+    });
+
+    const dashboardUrl = `https://cconbedrock-dashboard.${config.domainName}`;
     this.userPoolClient = this.userPool.addClient('AppClient', {
       authFlows: { userPassword: true, userSrp: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-        callbackUrls: [`https://dashboard.${config.domainName}/api/auth/callback/cognito`],
-        logoutUrls: [`https://dashboard.${config.domainName}`],
+        callbackUrls: [`${dashboardUrl}/api/auth/callback/cognito`],
+        logoutUrls: [dashboardUrl],
       },
     });
 
@@ -141,12 +150,25 @@ export class SecurityStack extends cdk.Stack {
       actions: [
         'cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser',
         'cognito-idp:AdminGetUser', 'cognito-idp:AdminUpdateUserAttributes',
+        'cognito-idp:AdminDisableUser', 'cognito-idp:AdminEnableUser',
+        'cognito-idp:AdminAddUserToGroup',
         'cognito-idp:ListUsers',
       ],
       resources: [this.userPool.userPoolArn],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks'],
+      actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:TagResource'],
+      resources: ['*'],
+    }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'AlbManagement',
+      actions: [
+        'elasticloadbalancing:CreateTargetGroup', 'elasticloadbalancing:DeleteTargetGroup',
+        'elasticloadbalancing:RegisterTargets', 'elasticloadbalancing:DeregisterTargets',
+        'elasticloadbalancing:DescribeTargetGroups',
+        'elasticloadbalancing:CreateRule', 'elasticloadbalancing:DeleteRule',
+        'elasticloadbalancing:DescribeRules',
+      ],
       resources: ['*'],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({

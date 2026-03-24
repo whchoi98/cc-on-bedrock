@@ -18,7 +18,7 @@ interface SystemHealth {
   status: string;
   db: string;
   cache: string;
-  litellm_version: string;
+  architecture: string;
   model_count: number;
 }
 
@@ -275,12 +275,12 @@ export default function MonitoringDashboard({
           {healthStatuses.map((hs) => (
             <HealthCard key={hs.service} {...hs} />
           ))}
-          {/* LiteLLM system health cards */}
+          {/* Bedrock system health cards */}
           {systemHealth && (
             <>
               <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-medium text-gray-200">LiteLLM Proxy</h3>
+                  <h3 className="text-sm font-medium text-gray-200">Bedrock API</h3>
                   <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${
                     systemHealth.status === "healthy" ? "bg-green-900/30 text-green-400" : "bg-red-900/30 text-red-400"
                   }`}>
@@ -289,7 +289,7 @@ export default function MonitoringDashboard({
                   </span>
                 </div>
                 <p className="mt-2 text-sm text-gray-400">
-                  DB: {systemHealth.db} · Cache: {systemHealth.cache} · v{systemHealth.litellm_version}
+                  Usage: {systemHealth.db} · Architecture: {systemHealth.architecture ?? "Direct Bedrock"}
                 </p>
                 <p className="mt-1 text-xs text-gray-600">
                   {systemHealth.model_count} {t("monitoring.modelsConfigured")}

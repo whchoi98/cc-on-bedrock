@@ -21,7 +21,6 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
-  litellmAlbDns: string;
   devEnvCertificateArn?: string;
   hostedZone: route53.IHostedZone;
   cloudfrontSecret: secretsmanager.Secret;
@@ -36,16 +35,30 @@ export class EcsDevenvStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey,
-            litellmAlbDns, devEnvCertificateArn, hostedZone, cloudfrontSecret } = props;
+            devEnvCertificateArn, hostedZone, cloudfrontSecret } = props;
 
     // ECS Task Role (created in this stack to avoid cross-stack cyclic references)
     const ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
       roleName: 'cc-on-bedrock-ecs-task',
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
+    // Bedrock: All Claude models (Opus, Sonnet, Haiku)
+    // Both foundation-model and inference-profile ARNs required
     ecsTaskRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+        'bedrock:Converse',
+        'bedrock:ConverseStream',
+      ],
+      resources: [
+        // Foundation model ARNs
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        // Global inference profile ARNs
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
+        // APAC inference profile ARNs
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/apac.anthropic.claude-*`,
+      ],
     }));
     // SSM permissions for ECS Exec
     ecsTaskRole.addToPolicy(new iam.PolicyStatement({
@@ -208,23 +221,15 @@ export class EcsDevenvStack extends cdk.Stack {
             streamPrefix: `${os}-${tier.name}`,
           }),
           environment: {
-            // Claude Code → LiteLLM Proxy (IMDS blocked via iptables in entrypoint.sh)
-            ANTHROPIC_BASE_URL: `http://${litellmAlbDns}:4000`,
-            // ANTHROPIC_API_KEY: overridden at RunTask time with per-user LiteLLM key
-            ANTHROPIC_MODEL: 'claude-sonnet-4-6',
-            ANTHROPIC_SMALL_FAST_MODEL: 'claude-sonnet-4-6',
+            // Direct Bedrock access (LiteLLM proxy removed)
             AWS_DEFAULT_REGION: 'ap-northeast-2',
             AWS_REGION: 'ap-northeast-2',
             SECURITY_POLICY: 'open',  // Overridden at RunTask time
           },
           portMappings: [{ containerPort: 8080 }],
-          linuxParameters: (() => {
-            const params = new ecs.LinuxParameters(this, `LinuxParams-${os}-${tier.name}`, {
-              initProcessEnabled: true,  // Required for ECS Exec
-            });
-            params.addCapabilities(ecs.Capability.NET_ADMIN);  // Required for iptables IMDS block
-            return params;
-          })(),
+          linuxParameters: new ecs.LinuxParameters(this, `LinuxParams-${os}-${tier.name}`, {
+            initProcessEnabled: true,  // Required for ECS Exec
+          }),
         });
 
         // EFS Volume

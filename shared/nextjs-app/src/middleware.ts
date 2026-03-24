@@ -8,7 +8,7 @@ export default withAuth(
 
     // Public API endpoints — allow unauthenticated access
     if (path.startsWith("/api/health")) {
-      return NextResponse.json({ status: "ok" });
+      return NextResponse.next();
     }
 
     // Admin-only routes

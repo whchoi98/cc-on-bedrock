@@ -86,6 +86,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("[TTS] Polly error:", (err as Error).message);
-    return new Response((err as Error).message, { status: 500 });
+    return new Response("Internal server error", { status: 500 });
   }
 }

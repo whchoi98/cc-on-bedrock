@@ -8,6 +8,10 @@ model_list:
     litellm_params:
       model: "bedrock/global.anthropic.claude-sonnet-4-6"
       aws_region_name: "ap-northeast-2"
+  - model_name: "claude-haiku-4-5"
+    litellm_params:
+      model: "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+      aws_region_name: "ap-northeast-2"
 
   # --- Claude Code CLI model IDs ([1m] context window variants) ---
   - model_name: "global.anthropic.claude-opus-4-6-v1[1m]"

@@ -4,8 +4,6 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useI18n } from "@/lib/i18n";
 import type { SpendLog, ContainerInfo, ModelMetrics, ApiResponse } from "@/lib/types";
-import type { KeySpendInfo } from "@/lib/litellm-client";
-
 interface HomeDashboardProps {
   isAdmin: boolean;
 }
@@ -14,7 +12,7 @@ interface SystemHealth {
   status: string;
   db: string;
   cache: string;
-  litellm_version: string;
+  architecture: string;
   model_count: number;
 }
 
@@ -157,7 +155,6 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const [logs, setLogs] = useState<SpendLog[]>([]);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
-  const [keySpendList, setKeySpendList] = useState<KeySpendInfo[]>([]);
   const [modelMetrics, setModelMetrics] = useState<ModelMetrics[]>([]);
   const [cwMetrics, setCwMetrics] = useState<ContainerCWMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -179,14 +176,12 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
 
       if (isAdmin) {
         try {
-          const [healthRes, keyRes, metricsRes, cwRes] = await Promise.all([
+          const [healthRes, metricsRes, cwRes] = await Promise.all([
             fetch("/api/litellm?action=system_health"),
-            fetch("/api/litellm?action=key_spend_list"),
             fetch(`/api/litellm?action=model_metrics&start_date=${weekAgo}&end_date=${tomorrow}`),
             fetch("/api/container-metrics?action=current"),
           ]);
           if (healthRes.ok) { const j = (await healthRes.json()) as ApiResponse<SystemHealth>; setSystemHealth(j.data ?? null); }
-          if (keyRes.ok) { const j = (await keyRes.json()) as ApiResponse<KeySpendInfo[]>; setKeySpendList(j.data ?? []); }
           if (metricsRes.ok) { const j = (await metricsRes.json()) as ApiResponse<ModelMetrics[]>; setModelMetrics(j.data ?? []); }
           if (cwRes.ok) { const j = (await cwRes.json()) as ApiResponse<ContainerCWMetrics>; setCwMetrics(j.data ?? null); }
         } catch (e) { console.error("Admin fetch error:", e); }
@@ -218,11 +213,6 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const avgCostPerReq = totalRequests > 0 ? totalSpend / totalRequests : 0;
   const avgTokensPerReq = totalRequests > 0 ? totalTokens / totalRequests : 0;
   const outputRatio = totalTokens > 0 ? (totalOutput / totalTokens) * 100 : 0;
-
-  // Budget
-  const totalBudget = keySpendList.reduce((s, k) => s + (k.max_budget ?? 0), 0);
-  const totalKeySpend = keySpendList.reduce((s, k) => s + k.spend, 0);
-  const budgetPct = totalBudget > 0 ? (totalKeySpend / totalBudget) * 100 : 0;
 
   // Top model
   const topModel = [...modelMetrics].sort((a, b) => b.num_requests - a.num_requests)[0];
@@ -261,7 +251,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
               icon={<DollarIcon size={12} />} gradient="from-blue-900/40 to-blue-950/20" />
             <HeroCard title={t("home.totalRequests")} value={formatNum(totalRequests)} subtitle={`${formatNum(totalTokens)} tokens`}
               icon={<BoltIcon size={12} />} gradient="from-purple-900/40 to-purple-950/20" />
-            <HeroCard title={t("home.activeUsers")} value={String(activeUsers)} subtitle={`${keySpendList.length} API keys`}
+            <HeroCard title={t("home.activeUsers")} value={String(activeUsers)} subtitle={`${modelMetrics.length} models active`}
               icon={<UsersIcon size={12} />} gradient="from-green-900/40 to-green-950/20" />
             <HeroCard title={t("home.runningContainers")} value={`${runningContainers.length}`} subtitle={`${containers.length} total · ${cwMetrics?.containerInstanceCount ?? "?"} hosts`}
               icon={<ServerIcon size={12} />} gradient="from-amber-900/40 to-amber-950/20" />
@@ -276,7 +266,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
               <CompactStat label="Avg Tokens/Req" value={formatNum(avgTokensPerReq)} sub="In + Out" />
               <CompactStat label="Input Tokens" value={formatNum(totalInput)} sub={`${(100 - outputRatio).toFixed(0)}% of total`} color="text-blue-400" />
               <CompactStat label="Output Tokens" value={formatNum(totalOutput)} sub={`${outputRatio.toFixed(0)}% of total`} color="text-purple-400" />
-              <CompactStat label="Budget Used" value={`${budgetPct.toFixed(1)}%`} sub={`${formatCost(totalKeySpend)} / $${totalBudget.toFixed(0)}`} color={budgetPct > 80 ? "text-red-400" : "text-cyan-400"} />
+              <CompactStat label="Active Models" value={modelMetrics.filter(m => m.num_requests > 0).length || "-"} sub="Bedrock Direct" color="text-cyan-400" />
             </div>
           </div>
 
@@ -313,7 +303,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
                   <CompactStat label="Top Model" value={topModel ? topModel.model.replace("bedrock/", "").replace("global.anthropic.", "").split("-").slice(0, 2).join("-") : "-"} sub={topModel ? `${topModel.num_requests} requests` : ""} color="text-cyan-400" />
                   <CompactStat label="Avg Latency" value={`${avgLatency.toFixed(0)}ms`} sub="All models" color={avgLatency > 5000 ? "text-red-400" : "text-green-400"} />
                   <CompactStat label="Models Active" value={modelMetrics.filter(m => m.num_requests > 0).length} sub={`/ ${systemHealth?.model_count ?? modelMetrics.length} configured`} />
-                  <CompactStat label="LiteLLM" value={`v${systemHealth?.litellm_version ?? "?"}`} sub={`Cache: ${systemHealth?.cache ?? "?"}`} color="text-gray-300" />
+                  <CompactStat label="Architecture" value="Direct" sub="Bedrock Native" color="text-green-400" />
                 </div>
               </div>
             </div>
@@ -375,23 +365,25 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
               {systemHealth && (
                 <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
                   <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">System Status</p>
-                  <StatusDot ok={systemHealth.status === "healthy"} label="LiteLLM Proxy" value={systemHealth.status} />
-                  <StatusDot ok={systemHealth.db === "connected"} label="Database (PostgreSQL)" value={systemHealth.db} />
-                  <StatusDot ok={systemHealth.cache === "redis"} label="Cache (Valkey)" value={systemHealth.cache} />
-                  <StatusDot ok={true} label="Bedrock Models" value={`${systemHealth.model_count} configured`} />
+                  <StatusDot ok={systemHealth.status === "healthy"} label="Bedrock API" value={systemHealth.status} />
+                  <StatusDot ok={systemHealth.db === "dynamodb"} label="Usage Tracking (DynamoDB)" value={systemHealth.db} />
+                  <StatusDot ok={true} label="Architecture" value={systemHealth.architecture ?? "Direct Bedrock"} />
+                  <StatusDot ok={true} label="Bedrock Models" value={`${modelMetrics.length} active`} />
                   <StatusDot ok={runningContainers.length > 0} label="ECS Containers" value={`${runningContainers.length} running`} />
                 </div>
               )}
 
-              {/* API Key budget summary */}
-              {keySpendList.length > 0 && (
+              {/* Model cost summary */}
+              {modelMetrics.length > 0 && (
                 <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">API Key Budget</p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Model Cost (7d)</p>
                   <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                    {[...keySpendList].filter(k => k.key_alias).sort((a, b) => b.spend - a.spend).slice(0, 8).map((k) => {
-                      const pct = k.max_budget ? (k.spend / k.max_budget) * 100 : 0;
+                    {[...modelMetrics].sort((a, b) => b.total_spend - a.total_spend).slice(0, 8).map((m) => {
+                      const totalModelSpend = modelMetrics.reduce((s, x) => s + x.total_spend, 0);
+                      const pct = totalModelSpend > 0 ? (m.total_spend / totalModelSpend) * 100 : 0;
+                      const name = m.model.replace("bedrock/", "").replace("global.anthropic.", "").replace("apac.anthropic.", "");
                       return (
-                        <MiniBar key={k.key_name} pct={pct} color="bg-blue-500" label={k.key_alias || k.key_name} detail={`${formatCost(k.spend)} / $${k.max_budget ?? "∞"}`} />
+                        <MiniBar key={m.model} pct={pct} color="bg-cyan-500" label={name} detail={`${formatCost(m.total_spend)} · ${m.num_requests} req`} />
                       );
                     })}
                   </div>

@@ -429,14 +429,14 @@ export default function SecurityDashboard() {
               { item: isKo ? "CloudFront HTTPS" : "CloudFront HTTPS", status: true, detail: "ACM *.whchoi.net" },
               { item: isKo ? "VPC Endpoints (Private Link)" : "VPC Endpoints (Private Link)", status: true, detail: "8 endpoints" },
               { item: isKo ? "KMS 암호화" : "KMS Encryption", status: true, detail: "EBS, Secrets Manager" },
-              { item: isKo ? "Secrets Manager" : "Secrets Manager", status: true, detail: "4 secrets" },
+              { item: isKo ? "Secrets Manager" : "Secrets Manager", status: true, detail: "NextAuth, CloudFront" },
               { item: "DNS Firewall", status: true, detail: isKo ? "Restricted 규칙 적용" : "Restricted rules applied" },
               { item: isKo ? "Security Groups (3-tier DLP)" : "Security Groups (3-tier DLP)", status: true, detail: "Open/Restricted/Locked" },
               { item: "ECS Exec", status: true, detail: "initProcessEnabled + SSM" },
               { item: isKo ? "EFS 전송 암호화" : "EFS Transit Encryption", status: true, detail: "TLS enabled" },
-              { item: isKo ? "Valkey TLS" : "Valkey TLS", status: true, detail: "rediss:// (port 6379)" },
               { item: isKo ? "IMDSv2 강제" : "IMDSv2 Enforced", status: true, detail: "AL2023 default" },
-              { item: isKo ? "LiteLLM API Key 예산" : "LiteLLM API Key Budget", status: true, detail: "max_budget per key" },
+              { item: isKo ? "IAM 기반 사용량 제어" : "IAM-based Usage Control", status: true, detail: isKo ? "사용자별 Task Role" : "Per-user Task Role" },
+              { item: isKo ? "DynamoDB 사용량 추적" : "DynamoDB Usage Tracking", status: true, detail: "CloudTrail → Lambda → DDB" },
             ].map((check) => (
               <div key={check.item} className="flex items-center gap-3 py-1.5">
                 <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${check.status ? "bg-green-900/30 text-green-400" : "bg-red-900/30 text-red-400"}`}>

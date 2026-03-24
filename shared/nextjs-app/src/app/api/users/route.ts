@@ -9,18 +9,13 @@ import {
   deleteCognitoUser,
   disableCognitoUser,
   enableCognitoUser,
-  updateCognitoUserAttribute,
 } from "@/lib/aws-clients";
-import { generateKey, deleteKey } from "@/lib/litellm-client";
 import type { CreateUserInput, UpdateUserInput } from "@/lib/types";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
-    return NextResponse.json(
-      { error: "Admin access required" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
   const { searchParams } = new URL(req.url);
@@ -31,67 +26,35 @@ export async function GET(req: NextRequest) {
       const user = await getCognitoUser(username);
       return NextResponse.json({ success: true, data: user });
     }
-
     const users = await listCognitoUsers();
     return NextResponse.json({ success: true, data: users });
   } catch (err) {
     console.error("[users] GET", err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      { success: false, error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
-    return NextResponse.json(
-      { error: "Admin access required" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
   try {
     const body = (await req.json()) as CreateUserInput;
-
-    // 1. Create Cognito user
+    // Direct Bedrock mode: no API key needed, just create Cognito user
     const cognitoUser = await createCognitoUser(body);
-
-    // 2. Generate LiteLLM virtual key
-    const litellmKey = await generateKey({
-      user_id: cognitoUser.username,
-      key_alias: `key-${body.subdomain}`,
-      models: ["claude-opus-4-6", "claude-sonnet-4-6"],
-    });
-
-    // 3. Store LiteLLM key in Cognito custom attribute
-    await updateCognitoUserAttribute(
-      cognitoUser.username,
-      "custom:litellm_api_key",
-      litellmKey.key
-    );
-
-    return NextResponse.json({
-      success: true,
-      data: { ...cognitoUser, litellmApiKey: litellmKey.key },
-    });
+    return NextResponse.json({ success: true, data: cognitoUser });
   } catch (err) {
     console.error("[users] POST", err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      { success: false, error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }
 
 export async function PUT(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
-    return NextResponse.json(
-      { error: "Admin access required" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
   try {
@@ -100,20 +63,14 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[users] PUT", err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      { success: false, error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }
 
 export async function DELETE(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.isAdmin) {
-    return NextResponse.json(
-      { error: "Admin access required" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
   const { searchParams } = new URL(req.url);
@@ -121,10 +78,7 @@ export async function DELETE(req: NextRequest) {
   const action = searchParams.get("action");
 
   if (!username) {
-    return NextResponse.json(
-      { error: "Username required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Username required" }, { status: 400 });
   }
 
   try {
@@ -135,25 +89,12 @@ export async function DELETE(req: NextRequest) {
       case "enable":
         await enableCognitoUser(username);
         return NextResponse.json({ success: true });
-      default: {
-        // Full delete: remove LiteLLM key, then Cognito user
-        const user = await getCognitoUser(username);
-        if (user.litellmApiKey) {
-          try {
-            await deleteKey(user.litellmApiKey);
-          } catch {
-            // Key may already be deleted; continue
-          }
-        }
+      default:
         await deleteCognitoUser(username);
         return NextResponse.json({ success: true });
-      }
     }
   } catch (err) {
     console.error("[users] DELETE", err instanceof Error ? err.message : err);
-    return NextResponse.json(
-      { success: false, error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 });
   }
 }

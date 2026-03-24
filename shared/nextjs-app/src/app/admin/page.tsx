@@ -13,7 +13,7 @@ export default async function AdminPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-100">User Management</h1>
         <p className="mt-1 text-sm text-gray-400">
-          Create, update, and manage Cognito users and LiteLLM API keys
+          Create, update, and manage Cognito users and Bedrock access
         </p>
       </div>
       <UserManagement />

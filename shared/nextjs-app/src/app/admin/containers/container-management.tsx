@@ -63,11 +63,6 @@ export default function ContainerManagement({
     const user = users.find((u) => u.username === selectedUser);
     if (!user) return;
 
-    if (!user.litellmApiKey) {
-      setError("User does not have a LiteLLM API key. Create one first in User Management.");
-      return;
-    }
-
     setStarting(true);
     setError(null);
 
@@ -75,10 +70,10 @@ export default function ContainerManagement({
       const input: StartContainerInput = {
         username: user.username,
         subdomain: user.subdomain,
+        department: user.department ?? "default",
         containerOs: user.containerOs,
         resourceTier: user.resourceTier,
         securityPolicy: user.securityPolicy,
-        litellmApiKey: user.litellmApiKey,
       };
 
       const res = await fetch("/api/containers", {
