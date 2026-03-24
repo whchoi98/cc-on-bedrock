@@ -5,6 +5,7 @@ awsops 패턴 참조: Strands Agent + 동적 Gateway 라우팅 + Skill Prompt
 """
 import json
 import logging
+import os
 from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp.mcp_client import MCPClient
@@ -21,7 +22,7 @@ logging.basicConfig(format="%(levelname)s | %(name)s | %(message)s", handlers=[l
 app = BedrockAgentCoreApp()
 
 # Gateway URL (단일 Gateway, 향후 역할별 분리 가능)
-GATEWAY_URL = ""  # Will be set from environment or payload
+GATEWAY_URL = os.environ.get("GATEWAY_URL", "https://cconbedrock-gateway-u1p3qlbsz6.gateway.bedrock-agentcore.ap-northeast-2.amazonaws.com/mcp")
 GATEWAY_REGION = "ap-northeast-2"
 SERVICE = "bedrock-agentcore"
 
