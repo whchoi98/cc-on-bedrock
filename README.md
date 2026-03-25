@@ -114,6 +114,30 @@ Every 5 min: Lambda: budget-check
 | Users | Admin | Cognito CRUD, sort/filter (OS, Tier, Security, Status) |
 | Containers | Admin | ECS start/stop, sort/filter, EFS panel, duplicate prevention |
 
+### Screenshots
+
+**Home** — Platform overview with cost, tokens, containers, and cluster metrics
+![Home](img/home.png)
+
+**AI Assistant** — Conversational AI with Bedrock Converse API + Tool Use
+![AI Assistant](img/AI_Assistant.png)
+
+**Analytics** — Cost trends, model usage, department breakdown, user leaderboard
+![Analytics 1](img/Analytics01.png)
+![Analytics 2](img/Analytics02.png)
+
+**Monitoring** — Container Insights: CPU, Memory, Network, ECS status
+![Monitoring](img/monitoring.png)
+
+**Security** — IAM policies, DLP status, DNS Firewall, security checklist
+![Security](img/security.png)
+
+**Users** — Cognito user management with sort/filter
+![Users](img/user.png)
+
+**Containers** — ECS container management with EFS panel
+![Containers](img/containers.png)
+
 ## Project Structure
 
 ```
@@ -281,6 +305,30 @@ ECS Task (Claude Code) → Bedrock API 호출
 | Security | Admin | IAM, DLP, DNS Firewall, CloudTrail 감사, 체크리스트 |
 | Users | Admin | Cognito CRUD, 소팅/필터 (OS, Tier, Security, Status) |
 | Containers | Admin | ECS 시작/중지, 소팅/필터, EFS 패널, 중복 방지 |
+
+### 스크린샷
+
+**Home** — 비용, 토큰, 컨테이너, 클러스터 메트릭 종합
+![Home](img/home.png)
+
+**AI Assistant** — Bedrock Converse API + Tool Use 대화형 AI
+![AI Assistant](img/AI_Assistant.png)
+
+**Analytics** — 비용 트렌드, 모델 사용량, 부서별 분석, 사용자 리더보드
+![Analytics 1](img/Analytics01.png)
+![Analytics 2](img/Analytics02.png)
+
+**Monitoring** — Container Insights: CPU, Memory, Network, ECS 상태
+![Monitoring](img/monitoring.png)
+
+**Security** — IAM 정책, DLP 현황, DNS Firewall, 보안 체크리스트
+![Security](img/security.png)
+
+**Users** — Cognito 사용자 관리 (소팅/필터)
+![Users](img/user.png)
+
+**Containers** — ECS 컨테이너 관리 + EFS 패널
+![Containers](img/containers.png)
 
 ## 프로젝트 구조
 
