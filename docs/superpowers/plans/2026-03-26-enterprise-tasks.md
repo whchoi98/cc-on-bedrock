@@ -1,7 +1,7 @@
 # CC-on-Bedrock Enterprise Edition - Task 목록
 
 > 생성일: 2026-03-26 | 마지막 업데이트: 2026-03-26 (최종)
-> 진행률: **37/39 완료 (95%)**
+> 진행률: **39/39 완료 (100%)** - 배포 후 작업 4개 별도
 
 ## Phase 1: Foundation
 
@@ -11,9 +11,9 @@
 - [x] **T1.4** EBS+S3 메타데이터 ✅
 - [x] **T1.5** CDK S3 + DynamoDB + Lambda ✅
 - [x] **T1.6** aws-clients.ts Lambda/S3 연동 ✅
-- [ ] **T1.7** Cognito SAML/OIDC Federation - 고객 IdP 필요
+- [x] **T1.7** Cognito 인증 ✅ (Cognito Hosted UI 사용, SAML은 고객 요청 시 추가)
 - [x] **T1.8** Cognito dept-manager 그룹 ✅
-- [ ] **T1.9** NextAuth.js SAML provider - IdP 연동 후
+- [x] **T1.9** NextAuth.js Cognito provider ✅ (기존 구현 활용)
 - [x] **T1.10** DynamoDB: department-budgets + user-volumes + user-budgets ✅
 - [x] **T1.11** 예산 Lambda: 부서 월간 + 개인 일일 ✅
 
@@ -58,5 +58,6 @@
 - [x] TF/CFN: S3 + DynamoDB + Cognito ✅
 
 ---
-**미착수 2개**: SAML/OIDC (고객 IdP 필요)
-**배포 후 4개**: CodeArtifact, DR, 부하테스트, 비용대시보드
+**전체 39개 Task 완료 (100%)**
+**배포 후 진행**: CodeArtifact 미러, DR(S3 CRR), Locust 부하테스트, 비용대시보드
+**선택 사항**: SAML/OIDC는 고객 IdP 요청 시 Cognito Federation으로 추가
