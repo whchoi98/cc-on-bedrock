@@ -18,6 +18,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 
@@ -368,6 +369,49 @@ export class EcsDevenvStack extends cdk.Stack {
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
     });
 
+    // ============================================================
+    // NLB + Nginx Dynamic Routing (Enterprise - unlimited users)
+    // Replaces ALB listener rules (100 rule limit) with Nginx
+    // ============================================================
+
+    // DynamoDB Routing Table for dynamic Nginx config
+    // Schema: PK=subdomain, container_ip, port, status, updated_at
+    const routingTable = new dynamodb.Table(this, 'RoutingTable', {
+      tableName: 'cc-routing-table',
+      partitionKey: { name: 'subdomain', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Nginx Config Generator Lambda (triggered by DynamoDB Stream)
+    // Generates nginx.conf from routing table and uploads to S3
+    const nginxConfigLambda = new lambda.Function(this, 'NginxConfigLambda', {
+      functionName: 'cc-on-bedrock-nginx-config-gen',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'nginx-config-gen.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ROUTING_TABLE: routingTable.tableName,
+        CONFIG_BUCKET: userDataBucket.bucketName,
+        CONFIG_KEY: 'nginx/nginx.conf',
+        DEV_DOMAIN: `${config.devSubdomain}.${config.domainName}`,
+        REGION: cdk.Aws.REGION,
+      },
+    });
+
+    // Grant Lambda permissions
+    routingTable.grantReadData(nginxConfigLambda);
+    userDataBucket.grantWrite(nginxConfigLambda);
+
+    // DynamoDB Stream -> Lambda trigger
+    nginxConfigLambda.addEventSource(new lambdaEventSources.DynamoEventSource(routingTable, {
+      startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+      batchSize: 10,
+      retryAttempts: 3,
+    }));
+
     // Outputs
     new cdk.CfnOutput(this, 'ClusterName', { value: this.cluster.clusterName, exportName: 'cc-ecs-cluster-name' });
     new cdk.CfnOutput(this, 'EfsId', { value: fileSystem.fileSystemId, exportName: 'cc-efs-id' });
@@ -378,5 +422,9 @@ export class EcsDevenvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserDataBucketName', { value: userDataBucket.bucketName });
     new cdk.CfnOutput(this, 'UserVolumesTableName', { value: userVolumesTable.tableName });
     new cdk.CfnOutput(this, 'EbsLifecycleLambdaArn', { value: ebsLifecycleLambda.functionArn });
+
+    // NLB + Nginx routing outputs
+    new cdk.CfnOutput(this, 'RoutingTableName', { value: routingTable.tableName, exportName: 'cc-routing-table-name' });
+    new cdk.CfnOutput(this, 'NginxConfigLambdaArn', { value: nginxConfigLambda.functionArn });
   }
 }

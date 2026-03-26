@@ -1,0 +1,85 @@
+# Nginx dynamic routing template for CC-on-Bedrock Enterprise
+# Rendered by Lambda from DynamoDB routing table
+# Supports unlimited concurrent users (replaces ALB 100-rule limit)
+
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for" '
+                    'host="$host" upstream="$upstream_addr"';
+
+    access_log /var/log/nginx/access.log main;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    # Increase buffer sizes for WebSocket and large requests
+    proxy_buffer_size 128k;
+    proxy_buffers 4 256k;
+    proxy_busy_buffers_size 256k;
+    large_client_header_buffers 4 16k;
+
+    # WebSocket support
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+
+    # Health check endpoint (port 8080)
+    server {
+        listen 8080;
+        server_name _;
+
+        location /health {
+            access_log off;
+            return 200 'OK';
+            add_header Content-Type text/plain;
+        }
+
+        location /nginx-status {
+            stub_status on;
+            access_log off;
+        }
+    }
+
+    # Default server - container not found (port 443)
+    server {
+        listen 443 ssl default_server;
+        server_name _;
+
+        ssl_certificate /etc/nginx/ssl/cert.pem;
+        ssl_certificate_key /etc/nginx/ssl/key.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
+
+        location / {
+            default_type application/json;
+            return 503 '{"error":"Container not running. Please start your development environment from the portal.","code":"CONTAINER_NOT_FOUND"}';
+        }
+    }
+
+    # Dynamic upstream entries (rendered from DynamoDB)
+    # Format: upstream user_<subdomain> { server <container_ip>:<port>; }
+    # {{UPSTREAM_ENTRIES}}
+
+    # Dynamic server blocks (rendered from DynamoDB)
+    # Format: server { listen 443 ssl; server_name <subdomain>.dev.example.com; ... }
+    # {{SERVER_ENTRIES}}
+}

@@ -15,6 +15,16 @@ interface UsageData {
   estimatedCost: number;
 }
 
+interface DeptPolicy {
+  allowedTiers: ("light" | "standard" | "power")[];
+}
+
+const TIER_CONFIG = {
+  light: { label: "Light", cpu: "1 vCPU", memory: "2 GB", costMultiplier: 1 },
+  standard: { label: "Standard", cpu: "2 vCPU", memory: "4 GB", costMultiplier: 2 },
+  power: { label: "Power", cpu: "4 vCPU", memory: "8 GB", costMultiplier: 4 },
+} as const;
+
 export default function UserPortal({ user }: UserPortalProps) {
   const { t } = useI18n();
   const [container, setContainer] = useState<ContainerInfo | null>(null);
@@ -22,6 +32,12 @@ export default function UserPortal({ user }: UserPortalProps) {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedTier, setSelectedTier] = useState<"light" | "standard" | "power">(
+    user.resourceTier ?? "standard"
+  );
+  const [deptPolicy, setDeptPolicy] = useState<DeptPolicy>({
+    allowedTiers: ["light", "standard", "power"],
+  });
 
   const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "example.com";
   const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
@@ -49,6 +65,19 @@ export default function UserPortal({ user }: UserPortalProps) {
           setUsage(usageData.data);
         }
       }
+
+      // Fetch department policy for allowed tiers
+      try {
+        const deptRes = await fetch("/api/dept");
+        if (deptRes.ok) {
+          const deptData = await deptRes.json();
+          if (deptData.success && deptData.data?.policy?.allowedTiers) {
+            setDeptPolicy({ allowedTiers: deptData.data.policy.allowedTiers });
+          }
+        }
+      } catch {
+        // Use default policy if fetch fails
+      }
     } catch (err) {
       console.error("Failed to fetch data:", err);
     } finally {
@@ -63,13 +92,19 @@ export default function UserPortal({ user }: UserPortalProps) {
   }, [fetchData]);
 
   const handleStartContainer = async () => {
+    // Validate selected tier against department policy
+    if (!deptPolicy.allowedTiers.includes(selectedTier)) {
+      setError(`Tier "${selectedTier}" is not allowed for your department`);
+      return;
+    }
+
     setActionLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/user/container", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start" }),
+        body: JSON.stringify({ action: "start", resourceTier: selectedTier }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -172,6 +207,51 @@ export default function UserPortal({ user }: UserPortalProps) {
             <p className="text-sm text-gray-200">{user.subdomain ?? "-"}</p>
           </div>
         </div>
+
+        {/* Tier Selection (only when container is not running) */}
+        {!container && (
+          <div className="mb-4">
+            <label className="block text-sm text-gray-400 mb-2">
+              {t("user.selectTier") || "Select Resource Tier"}
+            </label>
+            <div className="grid grid-cols-3 gap-3">
+              {(["light", "standard", "power"] as const).map((tier) => {
+                const config = TIER_CONFIG[tier];
+                const isAllowed = deptPolicy.allowedTiers.includes(tier);
+                const isSelected = selectedTier === tier;
+                return (
+                  <button
+                    key={tier}
+                    onClick={() => isAllowed && setSelectedTier(tier)}
+                    disabled={!isAllowed}
+                    className={`p-3 rounded-lg border text-left transition-all ${
+                      isSelected
+                        ? "border-blue-500 bg-blue-900/30"
+                        : isAllowed
+                        ? "border-gray-700 bg-[#0d1117] hover:border-gray-600"
+                        : "border-gray-800 bg-gray-900/50 opacity-50 cursor-not-allowed"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`font-medium ${isSelected ? "text-blue-400" : "text-gray-200"}`}>
+                        {config.label}
+                      </span>
+                      <span className="text-xs text-gray-500">{config.costMultiplier}x</span>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {config.cpu} / {config.memory}
+                    </div>
+                    {!isAllowed && (
+                      <div className="text-xs text-red-400 mt-1">
+                        {t("user.tierNotAllowed") || "Not allowed"}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           {!container && (

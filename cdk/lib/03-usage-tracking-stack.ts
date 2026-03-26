@@ -105,6 +105,7 @@ export class UsageTrackingStack extends cdk.Stack {
       memorySize: 256,
       environment: {
         USAGE_TABLE_NAME: this.usageTable.tableName,
+        DEPT_BUDGETS_TABLE: 'cc-department-budgets',
         ECS_CLUSTER_NAME: 'cc-on-bedrock-devenv',
         DAILY_BUDGET_USD: '50',
         SNS_TOPIC_ARN: alertTopic.topicArn,
@@ -114,6 +115,7 @@ export class UsageTrackingStack extends cdk.Stack {
     });
 
     this.usageTable.grantReadData(budgetCheckLambda);
+    // Note: departmentBudgetsTable.grantReadData is called after table creation below
     // ECS: find and stop over-budget user containers
     budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks', 'ecs:StopTask'],
@@ -149,6 +151,20 @@ export class UsageTrackingStack extends cdk.Stack {
       pointInTimeRecovery: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+
+    // DynamoDB Table for per-user budgets
+    const userBudgetsTable = new dynamodb.Table(this, 'UserBudgetsTable', {
+      tableName: 'cc-user-budgets',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Grant budget check Lambda read access to department budgets table
+    departmentBudgetsTable.grantReadData(budgetCheckLambda);
 
     // ==================== Warm Stop Automation ====================
 
@@ -311,6 +327,10 @@ export class UsageTrackingStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DepartmentBudgetsTableName', {
       value: departmentBudgetsTable.tableName,
       exportName: 'cc-department-budgets-table-name',
+    });
+    new cdk.CfnOutput(this, 'UserBudgetsTableName', {
+      value: userBudgetsTable.tableName,
+      exportName: 'cc-user-budgets-table-name',
     });
     new cdk.CfnOutput(this, 'UserVolumesTableName', {
       value: userVolumesTable.tableName,

@@ -9,6 +9,38 @@ import {
   describeContainer,
   deregisterContainerFromAlb,
 } from "@/lib/aws-clients";
+import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { unmarshall } from "@aws-sdk/util-dynamodb";
+
+const region = process.env.AWS_REGION ?? "ap-northeast-2";
+const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
+const dynamodb = new DynamoDBClient({ region });
+
+const VALID_TIERS = ["light", "standard", "power"] as const;
+type ResourceTier = (typeof VALID_TIERS)[number];
+
+async function getDeptAllowedTiers(department: string): Promise<ResourceTier[]> {
+  try {
+    const result = await dynamodb.send(
+      new GetItemCommand({
+        TableName: DEPT_BUDGETS_TABLE,
+        Key: { dept_id: { S: department } },
+      })
+    );
+    if (result.Item) {
+      const item = unmarshall(result.Item);
+      if (item.allowedTiers && Array.isArray(item.allowedTiers)) {
+        return item.allowedTiers.filter((t: string) =>
+          VALID_TIERS.includes(t as ResourceTier)
+        ) as ResourceTier[];
+      }
+    }
+  } catch (err) {
+    console.warn("[user/container] Failed to fetch dept policy:", err);
+  }
+  // Default: allow all tiers
+  return ["light", "standard", "power"];
+}
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -23,7 +55,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { action, taskArn } = body;
+    const { action, taskArn, resourceTier: requestedTier } = body;
 
     if (action === "start") {
       // Check if user already has a running container
@@ -41,12 +73,31 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // Determine the tier to use: requested > user default > standard
+      const tierToUse: ResourceTier = VALID_TIERS.includes(requestedTier)
+        ? requestedTier
+        : (user.resourceTier as ResourceTier) ?? "standard";
+
+      // Validate tier against department policy
+      const department = "default"; // Could be extended to read from user attributes
+      const allowedTiers = await getDeptAllowedTiers(department);
+
+      if (!allowedTiers.includes(tierToUse)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Tier "${tierToUse}" is not allowed for your department. Allowed: ${allowedTiers.join(", ")}`,
+          },
+          { status: 403 }
+        );
+      }
+
       const newTaskArn = await startContainer({
         username: user.email,
         subdomain: user.subdomain,
-        department: "default", // Could be extended to read from user attributes
+        department,
         containerOs: user.containerOs ?? "ubuntu",
-        resourceTier: user.resourceTier ?? "standard",
+        resourceTier: tierToUse,
         securityPolicy: user.securityPolicy ?? "restricted",
       });
 
