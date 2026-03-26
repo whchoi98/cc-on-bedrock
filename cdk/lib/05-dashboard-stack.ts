@@ -140,6 +140,7 @@ export class DashboardStack extends cdk.Stack {
         'PORT=3000',
         'HOSTNAME=0.0.0.0',
         `VPC_ID=${vpc.vpcId}`,
+        `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
         'ENVEOF',
         '',
         '# Start Next.js',
