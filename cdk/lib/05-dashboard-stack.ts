@@ -142,6 +142,7 @@ export class DashboardStack extends cdk.Stack {
         `VPC_ID=${vpc.vpcId}`,
         `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
         'ENVEOF',
+        'chmod 600 /opt/dashboard/.env',
         '',
         '# Start Next.js',
         'cd /opt/dashboard',
