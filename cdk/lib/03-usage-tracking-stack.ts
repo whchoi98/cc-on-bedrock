@@ -213,9 +213,37 @@ export class UsageTrackingStack extends cdk.Stack {
       ],
     }));
 
-    // EventBridge: Idle check every 5 minutes
+    // Idle Check Lambda (lightweight metrics checker, can be called independently)
+    const idleCheckLambda = new lambda.Function(this, 'IdleCheckLambda', {
+      functionName: 'cc-on-bedrock-idle-check',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'idle-check.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 128,
+      environment: {
+        REGION: cdk.Aws.REGION,
+        ECS_CLUSTER: 'cc-on-bedrock-devenv',
+        IDLE_CPU_THRESHOLD: '5.0',
+        IDLE_NETWORK_THRESHOLD: '1000',
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    // Idle check Lambda permissions
+    idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
+      resources: ['*'],
+    }));
+    idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:GetMetricStatistics', 'cloudwatch:GetMetricData'],
+      resources: ['*'],
+    }));
+
+    // EventBridge: Idle check every 5 minutes (triggers warm-stop check_idle action)
     const idleCheckRule = new events.Rule(this, 'IdleCheckRule', {
       ruleName: 'cc-idle-check',
+      description: 'Check for idle ECS tasks every 5 minutes',
       schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
     });
     idleCheckRule.addTarget(new targets.LambdaFunction(warmStopLambda, {
@@ -272,7 +300,30 @@ export class UsageTrackingStack extends cdk.Stack {
     bedrockAuditRule.addTarget(new targets.LambdaFunction(auditLoggerLambda));
 
     // Outputs
-    new cdk.CfnOutput(this, 'WarmStopLambdaArn', { value: warmStopLambda.functionArn });
+    new cdk.CfnOutput(this, 'UsageTableName', {
+      value: this.usageTable.tableName,
+      exportName: 'cc-usage-table-name',
+    });
+    new cdk.CfnOutput(this, 'UsageTableArn', {
+      value: this.usageTable.tableArn,
+      exportName: 'cc-usage-table-arn',
+    });
+    new cdk.CfnOutput(this, 'DepartmentBudgetsTableName', {
+      value: departmentBudgetsTable.tableName,
+      exportName: 'cc-department-budgets-table-name',
+    });
+    new cdk.CfnOutput(this, 'UserVolumesTableName', {
+      value: userVolumesTable.tableName,
+      exportName: 'cc-user-volumes-table-name',
+    });
+    new cdk.CfnOutput(this, 'WarmStopLambdaArn', {
+      value: warmStopLambda.functionArn,
+      exportName: 'cc-warm-stop-lambda-arn',
+    });
+    new cdk.CfnOutput(this, 'IdleCheckLambdaArn', {
+      value: idleCheckLambda.functionArn,
+      exportName: 'cc-idle-check-lambda-arn',
+    });
     new cdk.CfnOutput(this, 'AuditLoggerLambdaArn', { value: auditLoggerLambda.functionArn });
     new cdk.CfnOutput(this, 'AuditTableName', { value: auditTable.tableName });
   }
