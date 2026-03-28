@@ -62,35 +62,51 @@ def get_today_usage():
 
 
 def get_monthly_usage_by_department():
-    """Scan DynamoDB for all USER# entries this month, grouped by department."""
+    """Scan DynamoDB for all USER# entries this month, grouped by department (with pagination)."""
     now = datetime.utcnow()
     month_prefix = now.strftime("%Y-%m")
-    result = table.scan(
-        FilterExpression="begins_with(PK, :prefix) AND begins_with(SK, :month)",
-        ExpressionAttributeValues={":prefix": "USER#", ":month": month_prefix},
-    )
     dept_spend = {}  # {dept: {"cost": X, "users": set()}}
-    for item in result.get("Items", []):
-        user = item["PK"].replace("USER#", "")
-        cost = float(item.get("estimatedCost", 0))
-        dept = item.get("department", "default")
-        if dept in dept_spend:
-            dept_spend[dept]["cost"] += cost
-            dept_spend[dept]["users"].add(user)
-        else:
-            dept_spend[dept] = {"cost": cost, "users": {user}}
+    last_key = None
+    while True:
+        params = {
+            "FilterExpression": "begins_with(PK, :prefix) AND begins_with(SK, :month)",
+            "ExpressionAttributeValues": {":prefix": "USER#", ":month": month_prefix},
+        }
+        if last_key:
+            params["ExclusiveStartKey"] = last_key
+        result = table.scan(**params)
+        for item in result.get("Items", []):
+            user = item["PK"].replace("USER#", "")
+            cost = float(item.get("estimatedCost", 0))
+            dept = item.get("department", "default")
+            if dept in dept_spend:
+                dept_spend[dept]["cost"] += cost
+                dept_spend[dept]["users"].add(user)
+            else:
+                dept_spend[dept] = {"cost": cost, "users": {user}}
+        last_key = result.get("LastEvaluatedKey")
+        if not last_key:
+            break
     return dept_spend
 
 
 def get_department_budgets():
-    """Fetch all department monthly budgets from cc-department-budgets table."""
+    """Fetch all department monthly budgets from cc-department-budgets table (with pagination)."""
     try:
-        result = dept_budgets_table.scan()
         budgets = {}
-        for item in result.get("Items", []):
-            dept_id = item.get("dept_id", item.get("department", "default"))
-            monthly_limit = float(item.get("monthlyBudget", item.get("monthly_limit", 0)))
-            budgets[dept_id] = monthly_limit
+        last_key = None
+        while True:
+            params = {}
+            if last_key:
+                params["ExclusiveStartKey"] = last_key
+            result = dept_budgets_table.scan(**params)
+            for item in result.get("Items", []):
+                dept_id = item.get("dept_id", item.get("department", "default"))
+                monthly_limit = float(item.get("monthlyBudget", item.get("monthly_limit", 0)))
+                budgets[dept_id] = monthly_limit
+            last_key = result.get("LastEvaluatedKey")
+            if not last_key:
+                break
         return budgets
     except Exception as e:
         print(f"[DEPT] Failed to fetch department budgets: {e}")

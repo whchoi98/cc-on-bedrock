@@ -6,6 +6,7 @@
 import {
   DynamoDBClient,
   ScanCommand,
+  QueryCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
@@ -70,17 +71,67 @@ export interface DailyUsage {
 
 // ─── Query Functions ───
 
+function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
+  const u = unmarshall(item);
+  return {
+    userId: (u.PK as string).replace("USER#", ""),
+    department: u.department ?? "default",
+    date: u.date ?? (u.SK as string).split("#")[0],
+    model: u.model ?? (u.SK as string).split("#")[1] ?? "unknown",
+    inputTokens: u.inputTokens ?? 0,
+    outputTokens: u.outputTokens ?? 0,
+    totalTokens: u.totalTokens ?? 0,
+    requests: u.requests ?? 0,
+    estimatedCost: Number(u.estimatedCost ?? 0),
+    latencySumMs: Number(u.latencySumMs ?? 0),
+  };
+}
+
 export async function getUsageRecords(params?: {
   startDate?: string;
   endDate?: string;
   userId?: string;
   department?: string;
 }): Promise<UsageRecord[]> {
+  // When userId is known, use Query (single partition) instead of Scan
+  if (params?.userId) {
+    const keyParts = ["PK = :pk"];
+    const exprValues: Record<string, AttributeValue> = {
+      ":pk": { S: `USER#${params.userId}` },
+    };
+    if (params.startDate && params.endDate) {
+      keyParts.push("SK BETWEEN :start AND :end");
+      exprValues[":start"] = { S: params.startDate };
+      exprValues[":end"] = { S: `${params.endDate}~` };
+    } else if (params.startDate) {
+      keyParts.push("SK >= :start");
+      exprValues[":start"] = { S: params.startDate };
+    } else if (params.endDate) {
+      keyParts.push("SK <= :end");
+      exprValues[":end"] = { S: `${params.endDate}~` };
+    }
+
+    const items: Record<string, AttributeValue>[] = [];
+    let lastKey: Record<string, AttributeValue> | undefined;
+    do {
+      const result = await dynamodb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: keyParts.join(" AND "),
+        ExpressionAttributeValues: exprValues,
+        ExclusiveStartKey: lastKey,
+      }));
+      items.push(...(result.Items ?? []));
+      lastKey = result.LastEvaluatedKey;
+    } while (lastKey);
+
+    return items.map(toUsageRecord);
+  }
+
+  // No userId: paginated Scan with optional filters
   const filterParts: string[] = ["begins_with(PK, :userPrefix)"];
   const exprValues: Record<string, AttributeValue> = {
     ":userPrefix": { S: "USER#" },
   };
-
   if (params?.startDate) {
     filterParts.push("SK >= :startDate");
     exprValues[":startDate"] = { S: params.startDate };
@@ -89,36 +140,25 @@ export async function getUsageRecords(params?: {
     filterParts.push("SK <= :endDate");
     exprValues[":endDate"] = { S: `${params.endDate}~` };
   }
-  if (params?.userId) {
-    filterParts.push("PK = :userId");
-    exprValues[":userId"] = { S: `USER#${params.userId}` };
-  }
   if (params?.department) {
     filterParts.push("department = :dept");
     exprValues[":dept"] = { S: params.department };
   }
 
-  const result = await dynamodb.send(new ScanCommand({
-    TableName: TABLE_NAME,
-    FilterExpression: filterParts.join(" AND "),
-    ExpressionAttributeValues: exprValues,
-  }));
+  const items: Record<string, AttributeValue>[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  do {
+    const result = await dynamodb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: filterParts.join(" AND "),
+      ExpressionAttributeValues: exprValues,
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+  } while (lastKey);
 
-  return (result.Items ?? []).map((item) => {
-    const u = unmarshall(item);
-    return {
-      userId: (u.PK as string).replace("USER#", ""),
-      department: u.department ?? "default",
-      date: u.date ?? (u.SK as string).split("#")[0],
-      model: u.model ?? (u.SK as string).split("#")[1] ?? "unknown",
-      inputTokens: u.inputTokens ?? 0,
-      outputTokens: u.outputTokens ?? 0,
-      totalTokens: u.totalTokens ?? 0,
-      requests: u.requests ?? 0,
-      estimatedCost: Number(u.estimatedCost ?? 0),
-      latencySumMs: Number(u.latencySumMs ?? 0),
-    };
-  });
+  return items.map(toUsageRecord);
 }
 
 export async function getUserSummaries(params?: {

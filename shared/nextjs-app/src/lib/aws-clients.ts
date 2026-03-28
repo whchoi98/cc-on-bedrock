@@ -104,13 +104,20 @@ function toCognitoUser(user: {
 // ─── Cognito: User CRUD ───
 
 export async function listCognitoUsers(): Promise<CognitoUser[]> {
-  const result = await cognitoClient.send(
-    new ListUsersCommand({
-      UserPoolId: userPoolId,
-      Limit: 60,
-    })
-  );
-  return (result.Users ?? []).map(toCognitoUser);
+  const allUsers: CognitoUser[] = [];
+  let paginationToken: string | undefined;
+  do {
+    const result = await cognitoClient.send(
+      new ListUsersCommand({
+        UserPoolId: userPoolId,
+        Limit: 60,
+        PaginationToken: paginationToken,
+      })
+    );
+    allUsers.push(...(result.Users ?? []).map(toCognitoUser));
+    paginationToken = result.PaginationToken;
+  } while (paginationToken);
+  return allUsers;
 }
 
 export async function getCognitoUser(username: string): Promise<CognitoUser> {

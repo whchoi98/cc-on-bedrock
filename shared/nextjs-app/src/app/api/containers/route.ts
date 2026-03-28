@@ -125,23 +125,25 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as StartContainerInput;
     const taskArn = await startContainer(body);
 
-    // Auto-register in ALB after a short delay for IP assignment
-    // Run in background - don't block the response
-    setTimeout(async () => {
+    // ALB registration runs async but with proper error tracking.
+    // Safe on EC2-hosted Next.js (long-lived process); not safe on Lambda/Edge.
+    void (async () => {
       try {
-        // Wait for task to get an IP (up to 30s)
+        await new Promise((r) => setTimeout(r, 2000));
         for (let i = 0; i < 6; i++) {
           await new Promise((r) => setTimeout(r, 5000));
           const info = await describeContainer(taskArn);
           if (info?.privateIp) {
             await registerContainerInAlb(body.subdomain, info.privateIp);
-            break;
+            console.log(`[containers] ALB registered: ${body.subdomain} → ${info.privateIp}`);
+            return;
           }
         }
+        console.warn(`[containers] ALB register timeout: no IP after 30s for ${body.subdomain}`);
       } catch (err) {
-        console.error("[containers] ALB register failed:", err);
+        console.error(`[containers] ALB register failed for ${body.subdomain}:`, err);
       }
-    }, 2000);
+    })();
 
     return NextResponse.json({ success: true, data: { taskArn } });
   } catch (err) {
