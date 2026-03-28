@@ -32,7 +32,7 @@ TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "cc-user-volumes")
 table = dynamodb.Table(TABLE_NAME)
 
 
-def lambda_handler(event: dict, context: Any) -> dict:
+def handler(event: dict, context: Any) -> dict:
     """
     Main Lambda handler for EBS lifecycle operations.
 

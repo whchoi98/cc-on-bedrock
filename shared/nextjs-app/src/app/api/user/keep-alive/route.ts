@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     await dynamodb.send(new UpdateItemCommand({
       TableName: TABLE_NAME,
       Key: {
-        userId: { S: targetUserId },
+        user_id: { S: targetUserId },
       },
       UpdateExpression: "SET keep_alive_until = :until, updated_at = :now",
       ExpressionAttributeValues: {

@@ -22,13 +22,12 @@ function getClient() {
 export async function POST(req: NextRequest) {
   // Accept API key or session auth
   const authHeader = req.headers.get("authorization");
-  const apiKey = process.env.RUNTIME_API_KEY ?? "";
-  if (apiKey && authHeader !== `Bearer ${apiKey}`) {
-    // If API key is configured, validate it
-    // If not configured, allow all (for development)
-    if (apiKey) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const apiKey = process.env.RUNTIME_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "RUNTIME_API_KEY not configured" }, { status: 403 });
+  }
+  if (authHeader !== `Bearer ${apiKey}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {

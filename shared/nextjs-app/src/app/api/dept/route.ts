@@ -13,7 +13,7 @@ import { listCognitoUsers } from "@/lib/aws-clients";
 import { getUsageRecords } from "@/lib/usage-client";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
-const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-on-bedrock-department-budgets";
+const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const APPROVAL_REQUESTS_TABLE = process.env.APPROVAL_REQUESTS_TABLE ?? "cc-on-bedrock-approval-requests";
 
 const dynamodb = new DynamoDBClient({ region });

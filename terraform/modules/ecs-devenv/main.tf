@@ -371,7 +371,7 @@ resource "aws_ecs_task_definition" "devenv" {
     portMappings = [{ containerPort = 8080 }]
 
     environment = [
-      { name = "ANTHROPIC_BASE_URL", value = "http://${var.litellm_alb_dns}:4000" },
+      { name = "CLAUDE_CODE_USE_BEDROCK", value = "1" },
       { name = "AWS_DEFAULT_REGION", value = data.aws_region.current.name },
       { name = "SECURITY_POLICY", value = "open" },
     ]
