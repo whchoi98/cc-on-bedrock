@@ -46,21 +46,7 @@ export interface UpdateUserInput {
   securityPolicy?: "open" | "restricted" | "locked";
 }
 
-// ─── LiteLLM Types ───
-
-export interface LiteLLMKey {
-  key: string;
-  key_name: string;
-  key_alias?: string;
-  spend: number;
-  max_budget?: number;
-  max_parallel_requests?: number;
-  tpm_limit?: number;
-  rpm_limit?: number;
-  models: string[];
-  user_id: string;
-  expires?: string;
-}
+// ─── Usage Analytics Types ───
 
 export interface SpendLog {
   request_id: string;
@@ -93,11 +79,13 @@ export interface SpendSummary {
   completion_tokens: number;
 }
 
-export interface ProxyHealth {
+export interface SystemHealth {
   status: string;
+  db: string;
+  cache: string;
+  architecture: string;
   version?: string;
-  uptime?: number;
-  last_updated?: string;
+  model_count?: number;
 }
 
 // ─── ECS / Container Types ───

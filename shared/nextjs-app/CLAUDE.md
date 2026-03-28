@@ -16,7 +16,7 @@
 - `src/app/api/container-metrics/route.ts` - CloudWatch Container Insights 메트릭
 - `src/app/api/security/route.ts` - 보안 현황 조회
 - `src/app/api/health/route.ts` - 헬스체크
-- `src/app/api/litellm/route.ts` - LiteLLM API (레거시, DynamoDB 전환 예정)
+- `src/app/api/usage/route.ts` - Usage Analytics API (DynamoDB 기반)
 - `src/app/api/users/route.ts` - Cognito 사용자 관리
 - `src/app/api/containers/route.ts` - ECS 컨테이너 관리
 
