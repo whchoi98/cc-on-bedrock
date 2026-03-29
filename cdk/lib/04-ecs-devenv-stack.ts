@@ -30,6 +30,7 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   hostedZone?: route53.IHostedZone;
   cloudfrontSecret: secretsmanager.Secret;
   taskPermissionBoundary?: iam.IManagedPolicy;
+  webAclArn?: string;
 }
 
 export class EcsDevenvStack extends cdk.Stack {
@@ -46,7 +47,7 @@ export class EcsDevenvStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey,
-            devEnvCertificateArn, cloudfrontSecret } = props;
+            devEnvCertificateArn, cloudfrontSecret, webAclArn } = props;
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
@@ -365,6 +366,7 @@ export class EcsDevenvStack extends cdk.Stack {
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
+      webAclId: webAclArn,
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(this.alb, {
           protocolPolicy: devEnvCertificateArn
@@ -434,6 +436,97 @@ export class EcsDevenvStack extends cdk.Stack {
       retryAttempts: 3,
     }));
 
+    // ─── Nginx Reverse Proxy Task Definition ───
+    const nginxTaskDef = new ecs.Ec2TaskDefinition(this, 'NginxTaskDef', {
+      family: 'cc-nginx-proxy',
+      networkMode: ecs.NetworkMode.AWS_VPC,
+      taskRole: ecsTaskRole,
+      executionRole: ecsTaskExecutionRole,
+    });
+
+    const nginxImage = ecs.ContainerImage.fromEcrRepository(
+      ecr.Repository.fromRepositoryName(this, 'NginxRepo', 'cc-on-bedrock/nginx'),
+    );
+
+    nginxTaskDef.addContainer('nginx', {
+      image: nginxImage,
+      memoryLimitMiB: 4096,
+      cpu: 2048,
+      essential: true,
+      environment: {
+        S3_BUCKET: userDataBucket.bucketName,
+        S3_CONFIG_KEY: 'nginx/nginx.conf',
+        RELOAD_INTERVAL: '5',
+        AWS_DEFAULT_REGION: cdk.Aws.REGION,
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: new logs.LogGroup(this, 'NginxLogGroup', {
+          logGroupName: '/cc-on-bedrock/ecs/nginx',
+          retention: logs.RetentionDays.TWO_WEEKS,
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        }),
+        streamPrefix: 'nginx',
+      }),
+      portMappings: [{ containerPort: 80, protocol: ecs.Protocol.TCP }],
+      healthCheck: {
+        command: ['CMD-SHELL', 'curl -f http://localhost:80/health || exit 1'],
+        interval: cdk.Duration.seconds(15),
+        timeout: cdk.Duration.seconds(5),
+        retries: 3,
+      },
+    });
+
+    // ─── Nginx Security Group ───
+    const nginxSg = new ec2.SecurityGroup(this, 'NginxSg', {
+      vpc,
+      description: 'Nginx reverse proxy SG',
+      allowAllOutbound: true,
+    });
+    nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
+
+    // ─── Nginx ECS Service ───
+    const nginxService = new ecs.Ec2Service(this, 'NginxService', {
+      cluster: this.cluster,
+      taskDefinition: nginxTaskDef,
+      desiredCount: 2,
+      minHealthyPercent: 50,
+      maxHealthyPercent: 200,
+      securityGroups: [nginxSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      enableExecuteCommand: true,
+      placementStrategies: [
+        ecs.PlacementStrategy.spreadAcrossInstances(),
+      ],
+    });
+
+    // ─── Network Load Balancer ───
+    const nlb = new elbv2.NetworkLoadBalancer(this, 'DevenvNlb', {
+      vpc,
+      internetFacing: false,
+      crossZoneEnabled: true,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    });
+
+    const nlbListener = nlb.addListener('NlbListener', {
+      port: 80,
+      protocol: elbv2.Protocol.TCP,
+    });
+
+    nlbListener.addTargets('NginxTargets', {
+      port: 80,
+      targets: [nginxService],
+      healthCheck: {
+        path: '/health',
+        protocol: elbv2.Protocol.HTTP,
+        healthyThresholdCount: 2,
+        unhealthyThresholdCount: 3,
+        interval: cdk.Duration.seconds(15),
+      },
+    });
+
+    // Grant Nginx S3 read access for config
+    userDataBucket.grantRead(ecsTaskRole);
+
     // Outputs
     new cdk.CfnOutput(this, 'ClusterName', { value: this.cluster.clusterName, exportName: 'cc-ecs-cluster-name' });
     new cdk.CfnOutput(this, 'EfsId', { value: fileSystem.fileSystemId, exportName: 'cc-efs-id' });
@@ -446,5 +539,6 @@ export class EcsDevenvStack extends cdk.Stack {
     // NLB + Nginx routing outputs
     new cdk.CfnOutput(this, 'RoutingTableName', { value: routingTable.tableName, exportName: 'cc-routing-table-name' });
     new cdk.CfnOutput(this, 'NginxConfigLambdaArn', { value: nginxConfigLambda.functionArn });
+    new cdk.CfnOutput(this, 'NlbDnsName', { value: nlb.loadBalancerDnsName, exportName: 'cc-devenv-nlb-dns' });
   }
 }

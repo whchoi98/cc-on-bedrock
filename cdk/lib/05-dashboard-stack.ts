@@ -31,6 +31,7 @@ export interface DashboardStackProps extends cdk.StackProps {
   sgLocked: ec2.ISecurityGroup;
   devenvAlbListenerArn: string;
   efsFileSystemId: string;
+  webAclArn?: string;
 }
 
 export class DashboardStack extends cdk.Stack {
@@ -39,7 +40,7 @@ export class DashboardStack extends cdk.Stack {
 
     const { config, vpc, encryptionKey, dashboardEc2Role,
             dashboardCertificateArn, cloudfrontCertificateArn,
-            cloudfrontSecret, userPool, userPoolClient } = props;
+            cloudfrontSecret, userPool, userPoolClient, webAclArn } = props;
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
@@ -278,6 +279,7 @@ export class DashboardStack extends cdk.Stack {
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DashboardCf', {
+      webAclId: webAclArn,
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(alb, {
           protocolPolicy: dashboardCertificateArn
