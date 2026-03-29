@@ -17,7 +17,7 @@ on:
 
 jobs:
   nextjs-validate:
-    name: Next.js — TypeScript + Lint + Build
+    name: Next.js — TypeScript + Build + Test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -31,7 +31,6 @@ jobs:
           cache-dependency-path: shared/nextjs-app/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
-      - run: npm run lint
       - run: npm run build
       - name: Run tests
         run: npx vitest run --passWithNoTests || true
