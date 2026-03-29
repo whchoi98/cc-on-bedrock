@@ -23,9 +23,7 @@ export interface DashboardStackProps extends cdk.StackProps {
   dashboardCertificateArn?: string;
   cloudfrontCertificateArn?: string;  // ACM cert in us-east-1 for CloudFront custom domain
   hostedZone?: route53.IHostedZone;
-  cloudfrontSecret: secretsmanager.Secret;
   userPool: cognito.UserPool;
-  userPoolClient: cognito.UserPoolClient;
   sgOpen: ec2.ISecurityGroup;
   sgRestricted: ec2.ISecurityGroup;
   sgLocked: ec2.ISecurityGroup;
@@ -40,7 +38,7 @@ export class DashboardStack extends cdk.Stack {
 
     const { config, vpc, encryptionKey, dashboardEc2Role,
             dashboardCertificateArn, cloudfrontCertificateArn,
-            cloudfrontSecret, userPool, userPoolClient, webAclArn } = props;
+            userPool, webAclArn } = props;
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
@@ -239,41 +237,19 @@ export class DashboardStack extends cdk.Stack {
       },
     });
 
+    // ALB access is restricted to CloudFront via Prefix List on SG (no secret header needed)
     if (dashboardCertificateArn) {
-      const httpsListener = alb.addListener('HttpsListener', {
+      alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [elbv2.ListenerCertificate.fromArn(dashboardCertificateArn)],
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-      // Only allow traffic with valid X-Custom-Secret header from CloudFront
-      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
-        listener: httpsListener,
-        priority: 1,
-        conditions: [
-          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
-        ],
-        targetGroups: [targetGroup],
+        defaultTargetGroups: [targetGroup],
       });
     } else {
-      const httpListener = alb.addListener('HttpListener', {
+      alb.addListener('HttpListener', {
         port: 80,
         protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
-        listener: httpListener,
-        priority: 1,
-        conditions: [
-          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
-        ],
-        targetGroups: [targetGroup],
+        defaultTargetGroups: [targetGroup],
       });
     }
 
@@ -285,9 +261,6 @@ export class DashboardStack extends cdk.Stack {
           protocolPolicy: dashboardCertificateArn
             ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
             : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          customHeaders: {
-            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
-          },
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,

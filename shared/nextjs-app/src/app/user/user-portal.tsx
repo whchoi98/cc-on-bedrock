@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useI18n } from "@/lib/i18n";
 import type { UserSession, ContainerInfo } from "@/lib/types";
+import ContainerMetrics from "@/components/container-metrics";
 
 interface UserPortalProps {
   user: UserSession;
@@ -38,6 +39,10 @@ export default function UserPortal({ user }: UserPortalProps) {
   const [deptPolicy, setDeptPolicy] = useState<DeptPolicy>({
     allowedTiers: ["light", "standard", "power"],
   });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [containerMetrics, setContainerMetrics] = useState<any>(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const metricsIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
   const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
@@ -90,6 +95,27 @@ export default function UserPortal({ user }: UserPortalProps) {
     const interval = setInterval(fetchData, 30000); // Refresh every 30s
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Fetch container metrics when container is running
+  useEffect(() => {
+    if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current);
+    if (!container || container.status !== "RUNNING") {
+      setContainerMetrics(null);
+      return;
+    }
+    const fetchMetrics = async () => {
+      setMetricsLoading(true);
+      try {
+        const res = await fetch("/api/user/container-metrics");
+        const json = await res.json();
+        if (json.success && json.data) setContainerMetrics(json.data);
+      } catch { /* ignore */ }
+      finally { setMetricsLoading(false); }
+    };
+    fetchMetrics();
+    metricsIntervalRef.current = setInterval(fetchMetrics, 30000);
+    return () => { if (metricsIntervalRef.current) clearInterval(metricsIntervalRef.current); };
+  }, [container?.status, container?.taskId]);
 
   const handleStartContainer = async () => {
     // Validate selected tier against department policy
@@ -191,7 +217,7 @@ export default function UserPortal({ user }: UserPortalProps) {
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           <div>
             <p className="text-xs text-gray-500 mb-1">{t("user.os") || "OS"}</p>
             <p className="text-sm text-gray-200">
@@ -205,6 +231,14 @@ export default function UserPortal({ user }: UserPortalProps) {
           <div>
             <p className="text-xs text-gray-500 mb-1">{t("user.subdomain") || "Subdomain"}</p>
             <p className="text-sm text-gray-200">{user.subdomain ?? "-"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Storage</p>
+            <p className="text-sm">
+              <span className={user.storageType === "ebs" ? "text-blue-400" : "text-green-400"}>
+                {(user.storageType ?? "efs").toUpperCase()}
+              </span>
+            </p>
           </div>
         </div>
 
@@ -333,6 +367,34 @@ export default function UserPortal({ user }: UserPortalProps) {
           </div>
         </div>
       </div>
+
+      {/* Container Metrics (shown when running) */}
+      {container?.status === "RUNNING" && (
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
+          {containerMetrics ? (
+            <ContainerMetrics
+              metrics={{
+                cpu: containerMetrics.cpu ?? 0,
+                cpuLimit: containerMetrics.cpuLimit ?? 1,
+                memory: containerMetrics.memory ?? 0,
+                memoryLimit: containerMetrics.memoryLimit ?? 1,
+                networkRx: containerMetrics.networkRx ?? 0,
+                networkTx: containerMetrics.networkTx ?? 0,
+                diskRead: containerMetrics.diskRead ?? 0,
+                diskWrite: containerMetrics.diskWrite ?? 0,
+              }}
+              timeseries={containerMetrics.timeseries ?? []}
+              loading={metricsLoading}
+            />
+          ) : (
+            <ContainerMetrics
+              metrics={{ cpu: 0, cpuLimit: 1, memory: 0, memoryLimit: 1, networkRx: 0, networkTx: 0, diskRead: 0, diskWrite: 0 }}
+              timeseries={[]}
+              loading={true}
+            />
+          )}
+        </div>
+      )}
 
       {/* Workspace Info */}
       <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">

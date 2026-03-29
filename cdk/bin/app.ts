@@ -84,7 +84,6 @@ const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   encryptionKey: securityStack.encryptionKey,
   devEnvCertificateArn: app.node.tryGetContext('devEnvCertArn'),
   // hostedZone imported directly from config to avoid cross-stack export dependency
-  cloudfrontSecret: securityStack.cloudfrontSecret,
   taskPermissionBoundary: securityStack.taskPermissionBoundary,
   webAclArn: wafStack.webAclArn,
   description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
@@ -101,9 +100,7 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   dashboardCertificateArn: app.node.tryGetContext('dashboardCertArn'),
   cloudfrontCertificateArn: app.node.tryGetContext('cloudfrontCertArn'),
   // hostedZone imported directly from config to avoid cross-stack export dependency
-  cloudfrontSecret: securityStack.cloudfrontSecret,
   userPool: securityStack.userPool,
-  userPoolClient: securityStack.userPoolClient,
   sgOpen: ecsDevenvStack.sgOpen,
   sgRestricted: ecsDevenvStack.sgRestricted,
   sgLocked: ecsDevenvStack.sgLocked,

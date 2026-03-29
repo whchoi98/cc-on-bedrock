@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
         containerOs: user.containerOs ?? "ubuntu",
         resourceTier: tierToUse,
         securityPolicy: user.securityPolicy ?? "restricted",
+        storageType: user.storageType ?? "efs",
       });
 
       // Auto-register route after a short delay for IP assignment

@@ -20,6 +20,7 @@ declare module "next-auth/jwt" {
     securityPolicy?: string;
     litellmApiKey?: string;
     containerId?: string;
+    storageType?: string;
   }
 }
 
@@ -60,6 +61,7 @@ export const authOptions: NextAuthOptions = {
         token.litellmApiKey =
           (p["custom:litellm_api_key"] as string) ?? undefined;
         token.containerId = (p["custom:container_id"] as string) ?? undefined;
+        token.storageType = (p["custom:storage_type"] as string) ?? undefined;
       }
       return token;
     },
@@ -77,6 +79,7 @@ export const authOptions: NextAuthOptions = {
         securityPolicy: token.securityPolicy as UserSession["securityPolicy"],
         litellmApiKey: token.litellmApiKey,
         containerId: token.containerId,
+        storageType: token.storageType as UserSession["storageType"],
       };
       session.accessToken = token.accessToken;
       return session;

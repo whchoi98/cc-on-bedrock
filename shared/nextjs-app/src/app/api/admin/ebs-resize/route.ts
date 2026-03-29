@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { getCognitoUser } from "@/lib/aws-clients";
 import {
   DynamoDBClient,
   ScanCommand,
@@ -105,6 +106,15 @@ export async function POST(req: NextRequest) {
 
     if (typeof approved !== "boolean") {
       return NextResponse.json({ error: "approved (boolean) is required" }, { status: 400 });
+    }
+
+    // Verify target user uses EBS storage
+    const targetUser = await getCognitoUser(userId);
+    if (targetUser.storageType !== "ebs") {
+      return NextResponse.json(
+        { success: false, error: "Target user does not use EBS storage" },
+        { status: 400 }
+      );
     }
 
     // Get the current resize request

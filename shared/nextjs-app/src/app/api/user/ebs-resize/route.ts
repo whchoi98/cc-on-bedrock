@@ -34,6 +34,12 @@ export async function GET() {
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
+  if (session.user.storageType !== "ebs") {
+    return NextResponse.json(
+      { success: false, error: "EBS storage not configured for this user", storageType: session.user.storageType ?? "efs" },
+      { status: 400 }
+    );
+  }
 
   const userId = session.user.subdomain ?? session.user.email;
 
@@ -86,6 +92,12 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+  if (session.user.storageType !== "ebs") {
+    return NextResponse.json(
+      { success: false, error: "EBS storage not configured for this user", storageType: session.user.storageType ?? "efs" },
+      { status: 400 }
+    );
   }
 
   const userId = session.user.subdomain ?? session.user.email;
@@ -187,6 +199,12 @@ export async function DELETE() {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+  if (session.user.storageType !== "ebs") {
+    return NextResponse.json(
+      { success: false, error: "EBS storage not configured for this user", storageType: session.user.storageType ?? "efs" },
+      { status: 400 }
+    );
   }
 
   const userId = session.user.subdomain ?? session.user.email;

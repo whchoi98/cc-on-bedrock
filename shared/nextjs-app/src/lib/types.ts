@@ -12,6 +12,7 @@ export interface UserSession {
   securityPolicy?: "open" | "restricted" | "locked";
   litellmApiKey?: string;
   containerId?: string;
+  storageType?: "ebs" | "efs";
 }
 
 export interface CognitoUser {
