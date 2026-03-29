@@ -219,7 +219,7 @@ def generate_nginx_config() -> str:
             if item.get("status") == "active":
                 routes.append({
                     "subdomain": item["subdomain"],
-                    "container_ip": item["container_ip"],
+                    "container_ip": item.get("container_ip") or item.get("targetIp", ""),
                     "port": int(item.get("port", 8080)),
                 })
 
