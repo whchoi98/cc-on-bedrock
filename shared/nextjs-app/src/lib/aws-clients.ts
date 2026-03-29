@@ -47,6 +47,12 @@ import {
   LambdaClient,
   InvokeCommand,
 } from "@aws-sdk/client-lambda";
+import {
+  SecretsManagerClient,
+  CreateSecretCommand,
+  PutSecretValueCommand,
+  GetSecretValueCommand,
+} from "@aws-sdk/client-secrets-manager";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
@@ -62,6 +68,7 @@ const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
 const elbv2Client = new ElasticLoadBalancingV2Client({ region });
 const iamClient = new IAMClient({ region });
+const secretsClient = new SecretsManagerClient({ region });
 
 const devenvAlbListenerArn = process.env.DEVENV_ALB_LISTENER_ARN ?? "";
 const vpcId = process.env.VPC_ID ?? "";
@@ -281,11 +288,12 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
           Action: "sts:AssumeRole",
         }],
       }),
+      PermissionsBoundary: `arn:aws:iam::${accountId}:policy/cc-on-bedrock-task-boundary`,
       Description: `Per-user ECS Task Role for ${subdomain}`,
       Tags: [{ Key: "cc-on-bedrock", Value: "user-task-role" }, { Key: "subdomain", Value: subdomain }],
     }));
 
-    // Attach Bedrock + basic permissions
+    // Attach scoped Bedrock + S3 + Logs + ECR + Secrets permissions
     await iamClient.send(new PutRolePolicyCommand({
       RoleName: roleName,
       PolicyName: "BedrockAccess",
@@ -293,32 +301,54 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
         Version: "2012-10-17",
         Statement: [
           {
+            Sid: "BedrockClaude",
             Effect: "Allow",
             Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
-            Resource: "*",
+            Resource: [
+              `arn:aws:bedrock:${region}::foundation-model/anthropic.claude-*`,
+              `arn:aws:bedrock:${region}:${accountId}:inference-profile/*anthropic.claude-*`,
+            ],
           },
           {
+            Sid: "S3UserData",
             Effect: "Allow",
             Action: ["s3:GetObject", "s3:PutObject"],
-            Resource: `arn:aws:s3:::cc-on-bedrock-*/*`,
+            Resource: [
+              `arn:aws:s3:::cc-on-bedrock-user-data-${accountId}`,
+              `arn:aws:s3:::cc-on-bedrock-user-data-${accountId}/users/${subdomain}/*`,
+            ],
           },
           {
+            Sid: "CloudWatchLogs",
             Effect: "Allow",
             Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            Resource: `arn:aws:logs:*:${accountId}:log-group:/cc-on-bedrock/*`,
+          },
+          {
+            Sid: "EcrAuth",
+            Effect: "Allow",
+            Action: ["ecr:GetAuthorizationToken"],
             Resource: "*",
           },
           {
+            Sid: "EcrPull",
             Effect: "Allow",
-            Action: ["ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
-            Resource: "*",
+            Action: ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
+            Resource: `arn:aws:ecr:${region}:${accountId}:repository/cc-on-bedrock/*`,
+          },
+          {
+            Sid: "SecretsRead",
+            Effect: "Allow",
+            Action: ["secretsmanager:GetSecretValue"],
+            Resource: `arn:aws:secretsmanager:${region}:${accountId}:secret:cc-on-bedrock/codeserver/*`,
           },
         ],
       }),
     }));
 
     console.log(`[IAM] Created per-user role: ${roleName}`);
-    // Wait for IAM propagation
-    await new Promise((r) => setTimeout(r, 3000));
+    // Wait for IAM propagation (ECS needs role to be fully available)
+    await new Promise((r) => setTimeout(r, 10000));
     return roleArn;
   } catch (err) {
     console.error(`[IAM] Failed to create role ${roleName}:`, err);
@@ -360,6 +390,24 @@ export async function startContainer(
   // Create or get per-user IAM Task Role for budget control
   const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
 
+  // Generate per-user code-server password and store in Secrets Manager
+  const codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  try {
+    await secretsClient.send(new PutSecretValueCommand({
+      SecretId: secretName,
+      SecretString: codeserverPassword,
+    }));
+  } catch {
+    // Secret doesn't exist yet — create it
+    await secretsClient.send(new CreateSecretCommand({
+      Name: secretName,
+      SecretString: codeserverPassword,
+      Description: `code-server password for ${input.subdomain}`,
+    }));
+  }
+  const secretArn = `arn:aws:secretsmanager:${region}:${accountId}:secret:${secretName}`;
+
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
@@ -384,7 +432,8 @@ export async function startContainer(
               // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
-              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? require("crypto").randomBytes(16).toString("hex") },
+              // Password stored in Secrets Manager — pass ARN only (entrypoint fetches actual value)
+              { name: "CODESERVER_SECRET_ARN", value: secretArn },
               { name: "AWS_DEFAULT_REGION", value: region },
               ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
             ],
@@ -395,6 +444,8 @@ export async function startContainer(
         { key: "username", value: input.username },
         { key: "subdomain", value: input.subdomain },
         { key: "department", value: input.department },
+        { key: "securityPolicy", value: input.securityPolicy },
+        { key: "storageType", value: input.storageType ?? "efs" },
         { key: "domain", value: `${input.subdomain}.${devSubdomain}.${domainName}` },
       ],
     })
@@ -462,7 +513,8 @@ export async function listContainers(): Promise<ContainerInfo[]> {
       subdomain: getTag("subdomain"),
       containerOs,
       resourceTier,
-      securityPolicy: "restricted" as ContainerInfo["securityPolicy"],
+      securityPolicy: (getTag("securityPolicy") || "restricted") as ContainerInfo["securityPolicy"],
+      storageType: (getTag("storageType") || undefined) as ContainerInfo["storageType"],
       cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
       memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
       createdAt: task.createdAt?.toISOString() ?? "",
@@ -516,7 +568,8 @@ export async function describeContainer(
     subdomain: getTag("subdomain"),
     containerOs,
     resourceTier,
-    securityPolicy: "restricted",
+    securityPolicy: (getTag("securityPolicy") || "restricted") as ContainerInfo["securityPolicy"],
+    storageType: (getTag("storageType") || undefined) as ContainerInfo["storageType"],
     cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
     memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
     createdAt: task.createdAt?.toISOString() ?? "",
