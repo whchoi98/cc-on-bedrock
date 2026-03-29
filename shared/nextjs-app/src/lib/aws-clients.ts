@@ -64,6 +64,8 @@ const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
 const lambdaClient = new LambdaClient({ region });
 const s3SyncBucket = process.env.S3_SYNC_BUCKET ?? "";
 
+const MAX_COGNITO_PAGES = 20;
+
 const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
 const elbv2Client = new ElasticLoadBalancingV2Client({ region });
@@ -113,6 +115,7 @@ function toCognitoUser(user: {
 export async function listCognitoUsers(): Promise<CognitoUser[]> {
   const allUsers: CognitoUser[] = [];
   let paginationToken: string | undefined;
+  let pages = 0;
   do {
     const result = await cognitoClient.send(
       new ListUsersCommand({
@@ -123,7 +126,8 @@ export async function listCognitoUsers(): Promise<CognitoUser[]> {
     );
     allUsers.push(...(result.Users ?? []).map(toCognitoUser));
     paginationToken = result.PaginationToken;
-  } while (paginationToken);
+    pages++;
+  } while (paginationToken && pages < MAX_COGNITO_PAGES);
   return allUsers;
 }
 

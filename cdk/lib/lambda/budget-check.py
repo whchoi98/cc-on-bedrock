@@ -23,6 +23,7 @@ DAILY_BUDGET = float(os.environ.get("DAILY_BUDGET_USD", "50"))
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task"
+MAX_SCAN_PAGES = 100
 DENY_POLICY_NAME = "BudgetExceededDeny"
 DEPT_DENY_POLICY_NAME = "DeptBudgetExceededDeny"
 
@@ -39,6 +40,7 @@ def get_today_usage():
     today = datetime.utcnow().strftime("%Y-%m-%d")
     user_spend = {}
     last_key = None
+    pages = 0
     while True:
         params = {
             "FilterExpression": "begins_with(PK, :prefix) AND begins_with(SK, :today)",
@@ -56,7 +58,8 @@ def get_today_usage():
             else:
                 user_spend[user] = {"cost": cost, "department": dept}
         last_key = result.get("LastEvaluatedKey")
-        if not last_key:
+        pages += 1
+        if not last_key or pages >= MAX_SCAN_PAGES:
             break
     return user_spend
 
@@ -67,6 +70,7 @@ def get_monthly_usage_by_department():
     month_prefix = now.strftime("%Y-%m")
     dept_spend = {}  # {dept: {"cost": X, "users": set()}}
     last_key = None
+    pages = 0
     while True:
         params = {
             "FilterExpression": "begins_with(PK, :prefix) AND begins_with(SK, :month)",
@@ -85,7 +89,8 @@ def get_monthly_usage_by_department():
             else:
                 dept_spend[dept] = {"cost": cost, "users": {user}}
         last_key = result.get("LastEvaluatedKey")
-        if not last_key:
+        pages += 1
+        if not last_key or pages >= MAX_SCAN_PAGES:
             break
     return dept_spend
 
@@ -95,6 +100,7 @@ def get_department_budgets():
     try:
         budgets = {}
         last_key = None
+        pages = 0
         while True:
             params = {}
             if last_key:
@@ -105,7 +111,8 @@ def get_department_budgets():
                 monthly_limit = float(item.get("monthlyBudget", item.get("monthly_limit", 0)))
                 budgets[dept_id] = monthly_limit
             last_key = result.get("LastEvaluatedKey")
-            if not last_key:
+            pages += 1
+            if not last_key or pages >= MAX_SCAN_PAGES:
                 break
         return budgets
     except Exception as e:

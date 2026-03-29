@@ -15,6 +15,7 @@ const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const TABLE_NAME = process.env.USAGE_TABLE_NAME ?? "cc-on-bedrock-usage";
 
 const dynamodb = new DynamoDBClient({ region });
+const MAX_PAGES = 100;
 
 // ─── Types ───
 
@@ -113,6 +114,7 @@ export async function getUsageRecords(params?: {
 
     const items: Record<string, AttributeValue>[] = [];
     let lastKey: Record<string, AttributeValue> | undefined;
+    let pages = 0;
     do {
       const result = await dynamodb.send(new QueryCommand({
         TableName: TABLE_NAME,
@@ -122,7 +124,8 @@ export async function getUsageRecords(params?: {
       }));
       items.push(...(result.Items ?? []));
       lastKey = result.LastEvaluatedKey;
-    } while (lastKey);
+      pages++;
+    } while (lastKey && pages < MAX_PAGES);
 
     return items.map(toUsageRecord);
   }
@@ -147,6 +150,7 @@ export async function getUsageRecords(params?: {
 
   const items: Record<string, AttributeValue>[] = [];
   let lastKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
   do {
     const result = await dynamodb.send(new ScanCommand({
       TableName: TABLE_NAME,
@@ -156,7 +160,8 @@ export async function getUsageRecords(params?: {
     }));
     items.push(...(result.Items ?? []));
     lastKey = result.LastEvaluatedKey;
-  } while (lastKey);
+    pages++;
+  } while (lastKey && pages < MAX_PAGES);
 
   return items.map(toUsageRecord);
 }
