@@ -6,6 +6,11 @@ CC-on-Bedrock은 기업 환경에서도 안전하게 사용할 수 있도록 설
 
 <SecurityLayers />
 
+## 보안 관리 대시보드
+대시보드의 Security 탭에서 IAM 정책 상태, DLP 제어, DNS Firewall 차단 내역 등을 통합적으로 관리합니다.
+
+![Security Dashboard](/img/security.png)
+
 ## 7계층 보안 모델 상세
 
 | 계층 | 구성 요소 | 주요 보호 기능 |
@@ -25,7 +30,3 @@ CC-on-Bedrock은 기업 환경에서도 안전하게 사용할 수 있도록 설
 - **Open**: 자유로운 인터넷 아웃바운드 허용 (기본값)
 - **Restricted**: 사전에 정의된 특정 도메인(예: GitHub, npm)만 허용
 - **Locked**: 모든 인터넷 아웃바운드 차단 및 VPC 엔드포인트를 통한 AWS 서비스 접근만 허용
-
-## 감사 및 추적
-
-CloudTrail을 통해 모든 Bedrock 호출 및 인프라 변경 이력을 저장하며, 대시보드의 **Security** 페이지에서 실시간 차단 내역 및 보안 체크리스트를 확인할 수 있습니다.
