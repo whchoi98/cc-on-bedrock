@@ -26,7 +26,6 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
-  cloudfrontSecret: secretsmanager.Secret;
   devEnvCertificateArn?: string;
   hostedZone?: route53.IHostedZone;
   taskPermissionBoundary?: iam.IManagedPolicy;
@@ -46,8 +45,11 @@ export class EcsDevenvStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
 
-    const { config, vpc, encryptionKey, cloudfrontSecret,
+    const { config, vpc, encryptionKey,
             devEnvCertificateArn, webAclArn } = props;
+
+    // Import CloudFront secret directly (avoids cross-stack export dependency)
+    const cloudfrontSecret = secretsmanager.Secret.fromSecretNameV2(this, 'ImportedCfSecret', 'cc-on-bedrock/cloudfront-secret');
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
