@@ -369,6 +369,14 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
     });
 
+    // Auto Scaling: 2-4 Nginx tasks based on CPU utilization
+    const nginxScaling = nginxService.autoScaleTaskCount({ minCapacity: 2, maxCapacity: 4 });
+    nginxScaling.scaleOnCpuUtilization('NginxCpuScaling', {
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(60),
+      scaleOutCooldown: cdk.Duration.seconds(30),
+    });
+
     // ─── NLB (replaces ALB) ───
 
     this.nlb = new elbv2.NetworkLoadBalancer(this, 'DevenvNlb', {
