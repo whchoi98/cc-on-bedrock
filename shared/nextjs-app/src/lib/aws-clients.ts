@@ -588,9 +588,50 @@ export async function describeContainer(
   };
 }
 
-// ─── ALB Target Auto-Registration ───
+// ─── DynamoDB Routing Table ───
 
-export async function registerContainerInAlb(
+const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
+
+export async function registerContainerRoute(
+  subdomain: string,
+  privateIp: string
+): Promise<void> {
+  const { DynamoDBClient, PutItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  await ddb.send(new PutItemCommand({
+    TableName: ROUTING_TABLE,
+    Item: {
+      subdomain: { S: subdomain },
+      targetIp: { S: privateIp },
+      port: { N: "8080" },
+      status: { S: "active" },
+      updatedAt: { S: new Date().toISOString() },
+      domain: { S: `${subdomain}.${devSubdomain}.${domainName}` },
+    },
+  }));
+
+  console.log(`[Routing] Registered: ${subdomain} → ${privateIp}:8080`);
+}
+
+export async function deregisterContainerRoute(
+  subdomain: string
+): Promise<void> {
+  const { DynamoDBClient, DeleteItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  await ddb.send(new DeleteItemCommand({
+    TableName: ROUTING_TABLE,
+    Key: { subdomain: { S: subdomain } },
+  }));
+
+  console.log(`[Routing] Deregistered: ${subdomain}`);
+}
+
+// ─── ALB Target Auto-Registration (DEPRECATED: use registerContainerRoute / deregisterContainerRoute) ───
+
+/** @deprecated Use registerContainerRoute instead */
+export async function registerContainerInAlb_legacy(
   subdomain: string,
   privateIp: string
 ): Promise<void> {
@@ -681,7 +722,8 @@ export async function registerContainerInAlb(
   console.log(`[ALB] Registered ${subdomain} → ${privateIp}:8080`);
 }
 
-export async function deregisterContainerFromAlb(
+/** @deprecated Use deregisterContainerRoute instead */
+export async function deregisterContainerFromAlb_legacy(
   subdomain: string
 ): Promise<void> {
   try {

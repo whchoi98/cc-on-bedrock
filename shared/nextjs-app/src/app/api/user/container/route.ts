@@ -5,9 +5,9 @@ import {
   startContainer,
   stopContainer,
   listContainers,
-  registerContainerInAlb,
+  registerContainerRoute,
   describeContainer,
-  deregisterContainerFromAlb,
+  deregisterContainerRoute,
 } from "@/lib/aws-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
@@ -101,19 +101,19 @@ export async function POST(req: NextRequest) {
         securityPolicy: user.securityPolicy ?? "restricted",
       });
 
-      // Auto-register in ALB after a short delay for IP assignment
+      // Auto-register route after a short delay for IP assignment
       setTimeout(async () => {
         try {
           for (let i = 0; i < 6; i++) {
             await new Promise((r) => setTimeout(r, 5000));
             const info = await describeContainer(newTaskArn);
             if (info?.privateIp) {
-              await registerContainerInAlb(user.subdomain!, info.privateIp);
+              await registerContainerRoute(user.subdomain!, info.privateIp);
               break;
             }
           }
         } catch (err) {
-          console.error("[user/container] ALB register failed:", err);
+          console.error("[user/container] Route register failed:", err);
         }
       }, 2000);
 
@@ -138,11 +138,11 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Deregister from ALB before stopping
+      // Deregister route before stopping
       try {
-        await deregisterContainerFromAlb(user.subdomain);
+        await deregisterContainerRoute(user.subdomain);
       } catch (err) {
-        console.warn("[user/container] ALB deregister:", err);
+        console.warn("[user/container] Route deregister:", err);
       }
 
       await stopContainer({ taskArn, reason: "Stopped by user" });

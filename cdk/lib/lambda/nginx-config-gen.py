@@ -32,6 +32,7 @@ ROUTING_TABLE = os.environ.get("ROUTING_TABLE", "cc-routing-table")
 CONFIG_BUCKET = os.environ.get("CONFIG_BUCKET", "")
 CONFIG_KEY = os.environ.get("CONFIG_KEY", "nginx/nginx.conf")
 DEV_DOMAIN = os.environ.get("DEV_DOMAIN", "dev.example.com")
+CLOUDFRONT_SECRET = os.environ.get("CLOUDFRONT_SECRET", "")
 
 # AWS clients
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
@@ -41,6 +42,7 @@ s3 = boto3.client("s3", region_name=REGION)
 NGINX_TEMPLATE = """# Auto-generated nginx config for CC-on-Bedrock Enterprise
 # Generated at: {generated_at}
 # Active routes: {route_count}
+# CloudFront terminates TLS; Nginx listens on port 80 only
 
 worker_processes auto;
 error_log /var/log/nginx/error.log warn;
@@ -81,14 +83,14 @@ http {{
         '' close;
     }}
 
-    # Health check endpoint (port 8080)
+    # Health check endpoint for NLB
     server {{
-        listen 8080;
-        server_name _;
+        listen 80;
+        server_name localhost;
 
         location /health {{
             access_log off;
-            return 200 'OK';
+            return 200 'ok';
             add_header Content-Type text/plain;
         }}
 
@@ -98,16 +100,16 @@ http {{
         }}
     }}
 
-    # Default server - container not found (port 443)
+    # Default server - reject unknown hosts
     server {{
-        listen 443 ssl default_server;
+        listen 80 default_server;
         server_name _;
 
-        ssl_certificate /etc/nginx/ssl/cert.pem;
-        ssl_certificate_key /etc/nginx/ssl/key.pem;
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-        ssl_prefer_server_ciphers off;
+        # Validate CloudFront secret
+        set $cf_secret "{cloudfront_secret}";
+        if ($http_x_custom_secret != $cf_secret) {{
+            return 403 '{{"error":"Forbidden"}}';
+        }}
 
         location / {{
             default_type application/json;
@@ -124,7 +126,7 @@ http {{
 # Upstream block template
 UPSTREAM_TEMPLATE = """    # Upstream for {subdomain}
     upstream user_{subdomain} {{
-        server {container_ip}:{port};
+        server {container_ip}:{port} max_fails=3 fail_timeout=30s;
         keepalive 32;
     }}
 """
@@ -132,14 +134,14 @@ UPSTREAM_TEMPLATE = """    # Upstream for {subdomain}
 # Server block template
 SERVER_TEMPLATE = """    # Server block for {subdomain}
     server {{
-        listen 443 ssl;
+        listen 80;
         server_name {subdomain}.{domain};
 
-        ssl_certificate /etc/nginx/ssl/cert.pem;
-        ssl_certificate_key /etc/nginx/ssl/key.pem;
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-        ssl_prefer_server_ciphers off;
+        # Validate CloudFront secret
+        set $cf_secret "{cloudfront_secret}";
+        if ($http_x_custom_secret != $cf_secret) {{
+            return 403 '{{"error":"Forbidden"}}';
+        }}
 
         # Proxy settings
         proxy_http_version 1.1;
@@ -244,12 +246,14 @@ def generate_nginx_config() -> str:
         server_entries.append(SERVER_TEMPLATE.format(
             subdomain=route["subdomain"],
             domain=DEV_DOMAIN,
+            cloudfront_secret=CLOUDFRONT_SECRET,
         ))
 
     # Render final config
     config = NGINX_TEMPLATE.format(
         generated_at=datetime.utcnow().isoformat(),
         route_count=len(routes),
+        cloudfront_secret=CLOUDFRONT_SECRET,
         upstream_entries="\n".join(upstream_entries),
         server_entries="\n".join(server_entries),
     )
@@ -302,6 +306,7 @@ if __name__ == "__main__":
     os.environ["ROUTING_TABLE"] = "cc-routing-table"
     os.environ["CONFIG_BUCKET"] = "test-bucket"
     os.environ["DEV_DOMAIN"] = "dev.example.com"
+    os.environ["CLOUDFRONT_SECRET"] = "test-secret-value"
 
     # Generate config (without S3 upload)
     config = generate_nginx_config()

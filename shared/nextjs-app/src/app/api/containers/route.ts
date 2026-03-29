@@ -6,8 +6,8 @@ import {
   stopContainer,
   listContainers,
   describeContainer,
-  registerContainerInAlb,
-  deregisterContainerFromAlb,
+  registerContainerRoute,
+  deregisterContainerRoute,
 } from "@/lib/aws-clients";
 import { EFSClient, DescribeFileSystemsCommand } from "@aws-sdk/client-efs";
 import { ECSClient, ExecuteCommandCommand, ListTasksCommand, DescribeTasksCommand } from "@aws-sdk/client-ecs";
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
     const body = parsed.data;
     const taskArn = await startContainer(body);
 
-    // ALB registration runs async but with proper error tracking.
+    // Route registration runs async but with proper error tracking.
     // Safe on EC2-hosted Next.js (long-lived process); not safe on Lambda/Edge.
     void (async () => {
       try {
@@ -143,14 +143,14 @@ export async function POST(req: NextRequest) {
           await new Promise((r) => setTimeout(r, 5000));
           const info = await describeContainer(taskArn);
           if (info?.privateIp) {
-            await registerContainerInAlb(body.subdomain, info.privateIp);
-            console.log(`[containers] ALB registered: ${body.subdomain} → ${info.privateIp}`);
+            await registerContainerRoute(body.subdomain, info.privateIp);
+            console.log(`[containers] Route registered: ${body.subdomain} → ${info.privateIp}`);
             return;
           }
         }
-        console.warn(`[containers] ALB register timeout: no IP after 30s for ${body.subdomain}`);
+        console.warn(`[containers] Route register timeout: no IP after 30s for ${body.subdomain}`);
       } catch (err) {
-        console.error(`[containers] ALB register failed for ${body.subdomain}:`, err);
+        console.error(`[containers] Route register failed for ${body.subdomain}:`, err);
       }
     })();
 
@@ -180,12 +180,12 @@ export async function DELETE(req: NextRequest) {
     }
     const body = parsed.data;
 
-    // Deregister from ALB before stopping
+    // Deregister route before stopping
     if (body.subdomain) {
       try {
-        await deregisterContainerFromAlb(body.subdomain);
+        await deregisterContainerRoute(body.subdomain);
       } catch (err) {
-        console.warn("[containers] ALB deregister:", err);
+        console.warn("[containers] Route deregister:", err);
       }
     }
 

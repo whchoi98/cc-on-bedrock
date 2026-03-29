@@ -205,6 +205,7 @@ export class DashboardStack extends cdk.Stack {
         `DEVENV_ALB_LISTENER_ARN=${props.devenvAlbListenerArn}`,
         `S3_SYNC_BUCKET=${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
         `EFS_FILE_SYSTEM_ID=${props.efsFileSystemId}`,
+        'ROUTING_TABLE=cc-routing-table',
         'ENVEOF',
         'chmod 600 /opt/dashboard/.next/standalone/.env',
         '',

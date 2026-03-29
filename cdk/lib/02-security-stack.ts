@@ -285,6 +285,13 @@ export class SecurityStack extends cdk.Stack {
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests/*`,
       ],
     }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'RoutingTableAccess',
+      actions: ['dynamodb:PutItem', 'dynamodb:DeleteItem'],
+      resources: [
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
+      ],
+    }));
     this.encryptionKey.grantDecrypt(this.dashboardEc2Role);
 
     // Outputs
