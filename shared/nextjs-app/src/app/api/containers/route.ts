@@ -12,6 +12,7 @@ import {
 import { EFSClient, DescribeFileSystemsCommand } from "@aws-sdk/client-efs";
 import { ECSClient, ExecuteCommandCommand, ListTasksCommand, DescribeTasksCommand } from "@aws-sdk/client-ecs";
 import type { StartContainerInput, StopContainerInput } from "@/lib/types";
+import { startContainerSchema, stopContainerSchema } from "@/lib/validation";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const efsClient = new EFSClient({ region });
@@ -81,6 +82,9 @@ export async function GET(req: NextRequest) {
 
     // EFS metrics endpoint
     if (action === "efs") {
+      if (!EFS_ID) {
+        return NextResponse.json({ success: true, data: null });
+      }
       const [efsResp, perUser] = await Promise.all([
         efsClient.send(new DescribeFileSystemsCommand({ FileSystemId: EFS_ID })),
         getPerUserEfsUsage(),
@@ -122,7 +126,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const body = (await req.json()) as StartContainerInput;
+    const raw = await req.json();
+    const parsed = startContainerSchema.safeParse(raw);
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    const body = parsed.data;
     const taskArn = await startContainer(body);
 
     // ALB registration runs async but with proper error tracking.
@@ -164,7 +173,12 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
-    const body = (await req.json()) as StopContainerInput & { subdomain?: string };
+    const raw = await req.json();
+    const parsed = stopContainerSchema.safeParse(raw);
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    const body = parsed.data;
 
     // Deregister from ALB before stopping
     if (body.subdomain) {

@@ -2,13 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { keepAliveSchema } from "@/lib/validation";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const TABLE_NAME = process.env.USER_VOLUMES_TABLE ?? "cc-user-volumes";
 
 const dynamodb = new DynamoDBClient({ region });
+const storageType = process.env.STORAGE_TYPE ?? "efs";
 
 export async function POST(req: NextRequest) {
+  if (storageType !== "ebs") {
+    return NextResponse.json(
+      { success: true, storageType: "efs", message: "Keep-alive not needed in EFS mode" },
+      { status: 501 }
+    );
+  }
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -16,7 +24,11 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const userId = body.userId as string | undefined;
+    const parsed = keepAliveSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    const userId = parsed.data.userId;
 
     // Users can only extend their own idle timer, admins can extend any
     const targetUserId = session.user.isAdmin && userId ? userId : session.user.email;
