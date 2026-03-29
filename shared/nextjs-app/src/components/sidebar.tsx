@@ -10,16 +10,22 @@ interface NavItem {
   labelKey: string;
   icon: string;
   adminOnly?: boolean;
+  deptManagerOnly?: boolean;
+  showForAll?: boolean;
 }
 
 const navItems: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: "home" },
+  { href: "/user", labelKey: "nav.myEnv", icon: "desktop", showForAll: true },
+  { href: "/dept", labelKey: "nav.department", icon: "building", deptManagerOnly: true },
   { href: "/ai", labelKey: "nav.ai", icon: "sparkle", adminOnly: true },
   { href: "/analytics", labelKey: "nav.analytics", icon: "chart-bar" },
   { href: "/monitoring", labelKey: "nav.monitoring", icon: "activity", adminOnly: true },
   { href: "/security", labelKey: "nav.security", icon: "shield", adminOnly: true },
   { href: "/admin", labelKey: "nav.users", icon: "users", adminOnly: true },
   { href: "/admin/containers", labelKey: "nav.containers", icon: "server", adminOnly: true },
+  { href: "/admin/tokens", labelKey: "nav.tokens", icon: "token", adminOnly: true },
+  { href: "/admin/budgets", labelKey: "nav.budgets", icon: "wallet", adminOnly: true },
 ];
 
 function NavIcon({ icon }: { icon: string }) {
@@ -73,6 +79,34 @@ function NavIcon({ icon }: { icon: string }) {
             d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
         </svg>
       );
+    case "desktop":
+      return (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+        </svg>
+      );
+    case "building":
+      return (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+        </svg>
+      );
+    case "token":
+      return (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      );
+    case "wallet":
+      return (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -83,10 +117,14 @@ export default function Sidebar() {
   const { data: session } = useSession();
   const { locale, setLocale, t } = useI18n();
   const isAdmin = session?.user?.isAdmin ?? false;
+  const groups = session?.user?.groups ?? [];
+  const isDeptManager = groups.includes("dept-manager") || isAdmin;
 
-  const filteredItems = navItems.filter(
-    (item) => !item.adminOnly || isAdmin
-  );
+  const filteredItems = navItems.filter((item) => {
+    if (item.adminOnly && !isAdmin) return false;
+    if (item.deptManagerOnly && !isDeptManager) return false;
+    return true;
+  });
 
   return (
     <aside className="flex flex-col w-60 min-h-screen bg-[#161b22] border-r border-gray-800">
@@ -128,9 +166,12 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
         {filteredItems.map((item) => {
+          const hasChildNav = navItems.some(other => other.href !== item.href && other.href.startsWith(item.href + "/"));
           const isActive = item.href === "/"
             ? pathname === "/"
-            : pathname === item.href || pathname.startsWith(item.href + "/");
+            : hasChildNav
+              ? pathname === item.href
+              : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}

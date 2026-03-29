@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# --- Graceful shutdown: sync to S3 before exit ---
+cleanup() {
+  echo "Container stopping - running final S3 sync..."
+  if [ -n "${S3_SYNC_BUCKET:-}" ]; then
+    /opt/devenv/scripts/s3-sync.sh full-backup || true
+  fi
+  exit 0
+}
+trap cleanup SIGTERM SIGINT
+
 echo "=== CC-on-Bedrock Devenv Container Starting ==="
 
 USER_HOME="/home/coder"
@@ -107,6 +117,41 @@ done
 # --- Start idle monitor in background ---
 /opt/devenv/scripts/idle-monitor.sh &
 
+# --- Enterprise: Proxy Configuration ---
+if [ -n "${HTTP_PROXY:-}" ]; then
+  echo "Configuring proxy: $HTTP_PROXY"
+  cat > /etc/profile.d/proxy-env.sh << PROXYEOF
+export HTTP_PROXY="${HTTP_PROXY}"
+export HTTPS_PROXY="${HTTPS_PROXY:-$HTTP_PROXY}"
+export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,169.254.169.254,.amazonaws.com}"
+export http_proxy="${HTTP_PROXY}"
+export https_proxy="${HTTPS_PROXY:-$HTTP_PROXY}"
+export no_proxy="${NO_PROXY:-localhost,127.0.0.1,169.254.169.254,.amazonaws.com}"
+PROXYEOF
+  chmod 644 /etc/profile.d/proxy-env.sh
+  # Apply to current shell for S3 sync
+  source /etc/profile.d/proxy-env.sh
+  # Configure npm proxy
+  sudo -u coder npm config set proxy "$HTTP_PROXY" 2>/dev/null || true
+  sudo -u coder npm config set https-proxy "${HTTPS_PROXY:-$HTTP_PROXY}" 2>/dev/null || true
+fi
+
+# --- S3 Data Restore (if S3_SYNC_BUCKET is set) ---
+if [ -n "${S3_SYNC_BUCKET:-}" ]; then
+  echo "Restoring workspace from S3..."
+  /opt/devenv/scripts/s3-sync.sh restore || echo "S3 restore failed, continuing with empty workspace"
+  # Setup periodic sync — use cron if available, else background loop
+  if command -v crontab &>/dev/null; then
+    echo "*/5 * * * * /opt/devenv/scripts/s3-sync.sh sync >> /var/log/s3-sync.log 2>&1" | crontab -u coder -
+    crond 2>/dev/null || cron 2>/dev/null || true
+    echo "S3 sync configured: restore complete, cron scheduled"
+  else
+    # Fallback: background sync loop every 5 minutes
+    (while true; do sleep 300; /opt/devenv/scripts/s3-sync.sh sync >> /var/log/s3-sync.log 2>&1; done) &
+    echo "S3 sync configured: restore complete, background loop scheduled (no cron)"
+  fi
+fi
+
 # --- Start code-server ---
 # Claude Code: Bedrock mode via Task Role
 # CLAUDE_CODE_USE_BEDROCK=1 required to force Bedrock mode in ECS
@@ -126,9 +171,19 @@ chmod 644 /etc/profile.d/claude-env.sh
 if ! grep -q "profile.d/claude-env" "$USER_BASHRC" 2>/dev/null; then
   echo '[ -f /etc/profile.d/claude-env.sh ] && source /etc/profile.d/claude-env.sh' >> "$USER_BASHRC"
 fi
+# Resolve code-server password: prefer Secrets Manager ARN, fallback to env var
+if [ -n "${CODESERVER_SECRET_ARN:-}" ]; then
+  RESOLVED_PASSWORD=$(aws secretsmanager get-secret-value \
+    --secret-id "$CODESERVER_SECRET_ARN" \
+    --region "${AWS_DEFAULT_REGION:-ap-northeast-2}" \
+    --query SecretString --output text 2>/dev/null) || RESOLVED_PASSWORD="${CODESERVER_PASSWORD:-}"
+else
+  RESOLVED_PASSWORD="${CODESERVER_PASSWORD:-}"
+fi
+
 echo "Starting code-server for user: $SUBDOMAIN (Bedrock native mode)"
 exec sudo -u coder \
-  PASSWORD="${CODESERVER_PASSWORD:-}" \
+  PASSWORD="$RESOLVED_PASSWORD" \
   code-server \
   --bind-addr 0.0.0.0:8080 \
   --auth "${CODESERVER_AUTH:-password}" \

@@ -3,6 +3,10 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as efs from 'aws-cdk-lib/aws-efs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as path from 'path';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
@@ -14,33 +18,52 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
-import { CcOnBedrockConfig } from '../config/default';
+import { CcOnBedrockConfig, isEbsMode } from '../config/default';
 
 export interface EcsDevenvStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
   devEnvCertificateArn?: string;
-  hostedZone: route53.IHostedZone;
-  cloudfrontSecret: secretsmanager.Secret;
+  hostedZone?: route53.IHostedZone;
+  taskPermissionBoundary?: iam.IManagedPolicy;
+  webAclArn?: string;
 }
 
 export class EcsDevenvStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
-  public readonly ecrRepo: ecr.Repository;
+  public readonly ecrRepo: ecr.IRepository;
   public readonly alb: elbv2.ApplicationLoadBalancer;
+  public readonly sgOpen: ec2.SecurityGroup;
+  public readonly sgRestricted: ec2.SecurityGroup;
+  public readonly sgLocked: ec2.SecurityGroup;
+  public readonly devenvAlbListenerArn: string;
+  public readonly efsFileSystemId: string;
 
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey,
-            devEnvCertificateArn, hostedZone, cloudfrontSecret } = props;
+            devEnvCertificateArn, webAclArn } = props;
+
+    // Import CloudFront secret directly (avoids cross-stack export dependency)
+    const cloudfrontSecret = secretsmanager.Secret.fromSecretNameV2(this, 'ImportedCfSecret', 'cc-on-bedrock/cloudfront-secret');
+
+    // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
+    const hostedZone = config.hostedZoneId
+      ? route53.HostedZone.fromHostedZoneAttributes(this, 'ImportedHostedZone', {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.domainName,
+        })
+      : props.hostedZone!;
 
     // ECS Task Role (created in this stack to avoid cross-stack cyclic references)
     const ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
       roleName: 'cc-on-bedrock-ecs-task',
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      ...(props.taskPermissionBoundary ? { permissionsBoundary: props.taskPermissionBoundary } : {}),
     });
     // Bedrock: All Claude models (Opus, Sonnet, Haiku)
     // Both foundation-model and inference-profile ARNs required
@@ -85,14 +108,8 @@ export class EcsDevenvStack extends cdk.Stack {
       resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
     }));
 
-    // ECR Repository
-    this.ecrRepo = new ecr.Repository(this, 'DevenvRepo', {
-      repositoryName: 'cc-on-bedrock/devenv',
-      imageScanOnPush: true,
-      encryption: ecr.RepositoryEncryption.KMS,
-      encryptionKey,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
+    // ECR Repository (import existing - was created with RETAIN policy)
+    this.ecrRepo = ecr.Repository.fromRepositoryName(this, 'DevenvRepo', 'cc-on-bedrock/devenv');
 
     // EFS File System
     const fileSystem = new efs.FileSystem(this, 'DevenvEfs', {
@@ -100,26 +117,80 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       encrypted: true,
       kmsKey: encryptionKey,
-      lifecyclePolicy: efs.LifecyclePolicy.AFTER_30_DAYS,
+      lifecyclePolicy: efs.LifecyclePolicy.AFTER_14_DAYS,
       performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
-      throughputMode: efs.ThroughputMode.BURSTING,
+      throughputMode: efs.ThroughputMode.ELASTIC,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+    this.efsFileSystemId = fileSystem.fileSystemId;
+
+    // S3 Bucket for user workspace data (import existing - was created with RETAIN policy)
+    const userDataBucket = s3.Bucket.fromBucketAttributes(this, 'UserDataBucket', {
+      bucketName: `cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}`,
+      encryptionKey,
+    });
+
+    // EBS lifecycle (EBS mode only)
+    if (isEbsMode(config)) {
+      const userVolumesTable = dynamodb.Table.fromTableAttributes(this, 'UserVolumesTable', {
+        tableName: 'cc-user-volumes',
+        encryptionKey,
+      });
+
+      const ebsLifecycleLambda = new lambda.Function(this, 'EbsLifecycleLambda', {
+        functionName: 'cc-on-bedrock-ebs-lifecycle',
+        runtime: lambda.Runtime.PYTHON_3_12,
+        handler: 'ebs-lifecycle.handler',
+        code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+        timeout: cdk.Duration.minutes(5),
+        environment: {
+          VOLUMES_TABLE: 'cc-user-volumes',
+          REGION: cdk.Aws.REGION,
+        },
+      });
+      userVolumesTable.grantReadWriteData(ebsLifecycleLambda);
+      // Non-destructive EBS actions (wildcard resources)
+      ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
+        actions: [
+          'ec2:CreateVolume', 'ec2:AttachVolume', 'ec2:DetachVolume',
+          'ec2:CreateSnapshot', 'ec2:DescribeVolumes', 'ec2:DescribeSnapshots',
+          'ec2:CreateTags',
+        ],
+        resources: ['*'],
+      }));
+      // Destructive EBS actions restricted to cc-on-bedrock tagged resources only
+      ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['ec2:DeleteVolume', 'ec2:DeleteSnapshot'],
+        resources: ['*'],
+        conditions: {
+          StringEquals: {
+            'aws:ResourceTag/managed_by': 'cc-on-bedrock',
+          },
+        },
+      }));
+
+      new cdk.CfnOutput(this, 'EbsLifecycleLambdaArn', { value: ebsLifecycleLambda.functionArn });
+    }
 
     // DLP Security Groups
-    const sgOpen = new ec2.SecurityGroup(this, 'DevenvSgOpen', {
+    this.sgOpen = new ec2.SecurityGroup(this, 'DevenvSgOpen', {
       vpc, description: 'DLP: Open - all outbound', allowAllOutbound: true,
     });
-    const sgRestricted = new ec2.SecurityGroup(this, 'DevenvSgRestricted', {
+    this.sgRestricted = new ec2.SecurityGroup(this, 'DevenvSgRestricted', {
       vpc, description: 'DLP: Restricted - whitelist outbound', allowAllOutbound: false,
     });
-    sgRestricted.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal');
-    sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS for whitelisted domains');
+    this.sgRestricted.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal');
+    this.sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS for whitelisted domains');
 
-    const sgLocked = new ec2.SecurityGroup(this, 'DevenvSgLocked', {
+    this.sgLocked = new ec2.SecurityGroup(this, 'DevenvSgLocked', {
       vpc, description: 'DLP: Locked - VPC only', allowAllOutbound: false,
     });
-    sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal only');
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal only');
+
+    // Local aliases for convenience
+    const sgOpen = this.sgOpen;
+    const sgRestricted = this.sgRestricted;
+    const sgLocked = this.sgLocked;
 
     // Allow EFS access from all DLP SGs
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
@@ -141,20 +212,11 @@ export class EcsDevenvStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
-    // Bedrock permissions for Claude Code in containers (uses Instance Role via IMDS)
-    ecsInstanceRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
-    }));
+    // Bedrock permissions are on the ECS Task Role only (not Instance Role)
+    // to enforce least-privilege: host cannot call Bedrock, only containers can.
 
     const ecsLaunchTemplate = new ec2.LaunchTemplate(this, 'EcsCapacityLaunchTemplate', {
-      instanceType: (() => {
-        const [instanceClass, instanceSize] = config.ecsHostInstanceType.split('.');
-        return ec2.InstanceType.of(
-          instanceClass.toUpperCase() as unknown as ec2.InstanceClass,
-          instanceSize.toUpperCase() as unknown as ec2.InstanceSize,
-        );
-      })(),
+      instanceType: new ec2.InstanceType(config.ecsHostInstanceType),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
       role: ecsInstanceRole,
       securityGroup: sgOpen,
@@ -186,7 +248,7 @@ export class EcsDevenvStack extends cdk.Stack {
     const capacityProvider = new ecs.AsgCapacityProvider(this, 'EcsCapacityProvider', {
       autoScalingGroup: capacityAsg,
       enableManagedScaling: true,
-      enableManagedTerminationProtection: false,
+      enableManagedTerminationProtection: true,
       targetCapacityPercent: 80,
     });
     this.cluster.addAsgCapacityProvider(capacityProvider);
@@ -265,10 +327,20 @@ export class EcsDevenvStack extends cdk.Stack {
     });
     // CloudFront Prefix List - allow only CloudFront IPs on HTTPS
     albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront HTTPS');
+    // Port 80 removed: HTTPS-only when cert available, HTTP fallback for dev/test only
 
-    // Allow ALB → DevEnv containers on port 8080
+    // ─── Nginx Security Group (defined early for DevEnv SG ingress rules) ───
+    const nginxSg = new ec2.SecurityGroup(this, 'NginxSg', {
+      vpc,
+      description: 'Nginx reverse proxy SG',
+      allowAllOutbound: true,
+    });
+    nginxSg.addIngressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.tcp(80), 'Allow NLB + VPC traffic on port 80');
+
+    // Allow ALB + Nginx → DevEnv containers on port 8080
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
       sg.addIngressRule(albSg, ec2.Port.tcp(8080), 'Allow from DevEnv ALB');
+      sg.addIngressRule(nginxSg, ec2.Port.tcp(8080), 'Allow from Nginx proxy');
     });
 
     this.alb = new elbv2.ApplicationLoadBalancer(this, 'DevenvAlb', {
@@ -278,9 +350,11 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // Listener - HTTPS with X-Custom-Secret validation
+    // Listener - default 403 (per-user rules added dynamically by Dashboard)
+    // ALB access restricted to CloudFront via Prefix List on SG
+    let devenvListener: elbv2.ApplicationListener;
     if (devEnvCertificateArn) {
-      const httpsListener = this.alb.addListener('HttpsListener', {
+      devenvListener = this.alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [elbv2.ListenerCertificate.fromArn(devEnvCertificateArn)],
@@ -291,7 +365,7 @@ export class EcsDevenvStack extends cdk.Stack {
       });
     } else {
       // Fallback HTTP listener (dev/test only - production must use HTTPS)
-      this.alb.addListener('HttpListener', {
+      devenvListener = this.alb.addListener('HttpListener', {
         port: 80,
         protocol: elbv2.ApplicationProtocol.HTTP,
         defaultAction: elbv2.ListenerAction.fixedResponse(403, {
@@ -300,15 +374,35 @@ export class EcsDevenvStack extends cdk.Stack {
         }),
       });
     }
+    this.devenvAlbListenerArn = devenvListener.listenerArn;
 
-    // CloudFront Distribution
+    // ─── Network Load Balancer (internet-facing for CloudFront access) ───
+    const nlbSg = new ec2.SecurityGroup(this, 'NlbSg', {
+      vpc,
+      description: 'NLB SG - allow CloudFront only',
+      allowAllOutbound: true,
+    });
+    nlbSg.addIngressRule(
+      ec2.Peer.prefixList(config.cloudfrontPrefixListId),
+      ec2.Port.tcp(80),
+      'Allow CloudFront HTTP'
+    );
+
+    const nlb = new elbv2.NetworkLoadBalancer(this, 'DevenvNlb', {
+      vpc,
+      internetFacing: true,
+      crossZoneEnabled: true,
+      securityGroups: [nlbSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+    });
+
+    // CloudFront Distribution — origin is NLB (via Nginx), not ALB
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
+      webAclId: webAclArn,
       defaultBehavior: {
-        origin: new origins.LoadBalancerV2Origin(this.alb, {
-          protocolPolicy: devEnvCertificateArn
-            ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
-            : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          ...(devEnvCertificateArn ? {} : { httpPort: 80 }),
+        origin: new origins.HttpOrigin(nlb.loadBalancerDnsName, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          httpPort: 80,
           customHeaders: {
             'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
           },
@@ -318,8 +412,11 @@ export class EcsDevenvStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       },
-      // Note: CloudFront cert must be in us-east-1, handled separately
       comment: 'CC-on-Bedrock Dev Environment',
+      ...(devEnvCertificateArn ? {
+        domainNames: [`*.${config.devSubdomain}.${config.domainName}`],
+        certificate: acm.Certificate.fromCertificateArn(this, 'DevEnvCfCert', devEnvCertificateArn),
+      } : {}),
     });
 
     // Route 53 Wildcard Record
@@ -329,6 +426,124 @@ export class EcsDevenvStack extends cdk.Stack {
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
     });
 
+    // ============================================================
+    // NLB + Nginx Dynamic Routing (Enterprise - unlimited users)
+    // Replaces ALB listener rules (100 rule limit) with Nginx
+    // ============================================================
+
+    // DynamoDB Routing Table for dynamic Nginx config
+    // Schema: PK=subdomain, container_ip, port, status, updated_at
+    const routingTable = new dynamodb.Table(this, 'RoutingTable', {
+      tableName: 'cc-routing-table',
+      partitionKey: { name: 'subdomain', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Nginx Config Generator Lambda (triggered by DynamoDB Stream)
+    // Generates nginx.conf from routing table and uploads to S3
+    const nginxConfigLambda = new lambda.Function(this, 'NginxConfigLambda', {
+      functionName: 'cc-on-bedrock-nginx-config-gen',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'nginx-config-gen.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        ROUTING_TABLE: routingTable.tableName,
+        CONFIG_BUCKET: userDataBucket.bucketName,
+        CONFIG_KEY: 'nginx/nginx.conf',
+        DEV_DOMAIN: `${config.devSubdomain}.${config.domainName}`,
+        REGION: cdk.Aws.REGION,
+      },
+    });
+
+    // Grant Lambda permissions
+    routingTable.grantReadData(nginxConfigLambda);
+    userDataBucket.grantWrite(nginxConfigLambda);
+
+    // DynamoDB Stream -> Lambda trigger
+    nginxConfigLambda.addEventSource(new lambdaEventSources.DynamoEventSource(routingTable, {
+      startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+      batchSize: 10,
+      retryAttempts: 3,
+    }));
+
+    // ─── Nginx Reverse Proxy Task Definition ───
+    const nginxTaskDef = new ecs.Ec2TaskDefinition(this, 'NginxTaskDef', {
+      family: 'cc-nginx-proxy',
+      networkMode: ecs.NetworkMode.AWS_VPC,
+      taskRole: ecsTaskRole,
+      executionRole: ecsTaskExecutionRole,
+    });
+
+    const nginxImage = ecs.ContainerImage.fromEcrRepository(
+      ecr.Repository.fromRepositoryName(this, 'NginxRepo', 'cc-on-bedrock/nginx'),
+    );
+
+    nginxTaskDef.addContainer('nginx', {
+      image: nginxImage,
+      memoryLimitMiB: 4096,
+      cpu: 2048,
+      essential: true,
+      environment: {
+        S3_BUCKET: userDataBucket.bucketName,
+        S3_CONFIG_KEY: 'nginx/nginx.conf',
+        RELOAD_INTERVAL: '5',
+        AWS_DEFAULT_REGION: cdk.Aws.REGION,
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: new logs.LogGroup(this, 'NginxLogGroup', {
+          logGroupName: '/cc-on-bedrock/ecs/nginx',
+          retention: logs.RetentionDays.TWO_WEEKS,
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        }),
+        streamPrefix: 'nginx',
+      }),
+      portMappings: [{ containerPort: 80, protocol: ecs.Protocol.TCP }],
+      healthCheck: {
+        command: ['CMD-SHELL', 'curl -f http://localhost:80/health || exit 1'],
+        interval: cdk.Duration.seconds(15),
+        timeout: cdk.Duration.seconds(5),
+        retries: 3,
+      },
+    });
+
+    // ─── Nginx ECS Service ───
+    const nginxService = new ecs.Ec2Service(this, 'NginxService', {
+      cluster: this.cluster,
+      taskDefinition: nginxTaskDef,
+      desiredCount: 2,
+      minHealthyPercent: 50,
+      maxHealthyPercent: 200,
+      securityGroups: [nginxSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      enableExecuteCommand: true,
+      placementStrategies: [
+        ecs.PlacementStrategy.spreadAcrossInstances(),
+      ],
+    });
+
+    const nlbListener = nlb.addListener('NlbListener', {
+      port: 80,
+      protocol: elbv2.Protocol.TCP,
+    });
+
+    nlbListener.addTargets('NginxTargets', {
+      port: 80,
+      targets: [nginxService],
+      healthCheck: {
+        path: '/health',
+        protocol: elbv2.Protocol.HTTP,
+        healthyThresholdCount: 2,
+        unhealthyThresholdCount: 3,
+        interval: cdk.Duration.seconds(15),
+      },
+    });
+
+    // Grant Nginx S3 read access for config
+    userDataBucket.grantRead(ecsTaskRole);
+
     // Outputs
     new cdk.CfnOutput(this, 'ClusterName', { value: this.cluster.clusterName, exportName: 'cc-ecs-cluster-name' });
     new cdk.CfnOutput(this, 'EfsId', { value: fileSystem.fileSystemId, exportName: 'cc-efs-id' });
@@ -336,5 +551,11 @@ export class EcsDevenvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SgOpen', { value: sgOpen.securityGroupId, exportName: 'cc-sg-devenv-open' });
     new cdk.CfnOutput(this, 'SgRestricted', { value: sgRestricted.securityGroupId, exportName: 'cc-sg-devenv-restricted' });
     new cdk.CfnOutput(this, 'SgLocked', { value: sgLocked.securityGroupId, exportName: 'cc-sg-devenv-locked' });
+    new cdk.CfnOutput(this, 'UserDataBucketName', { value: userDataBucket.bucketName });
+
+    // NLB + Nginx routing outputs
+    new cdk.CfnOutput(this, 'RoutingTableName', { value: routingTable.tableName, exportName: 'cc-routing-table-name' });
+    new cdk.CfnOutput(this, 'NginxConfigLambdaArn', { value: nginxConfigLambda.functionArn });
+    new cdk.CfnOutput(this, 'NlbDnsName', { value: nlb.loadBalancerDnsName, exportName: 'cc-devenv-nlb-dns' });
   }
 }

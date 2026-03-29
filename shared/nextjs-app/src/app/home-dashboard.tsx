@@ -166,7 +166,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
 
       const [logsRes, containersRes] = await Promise.all([
-        fetch(`/api/litellm?action=spend_logs&start_date=${weekAgo}&end_date=${tomorrow}`),
+        fetch(`/api/usage?action=spend_logs&start_date=${weekAgo}&end_date=${tomorrow}`),
         fetch("/api/containers"),
       ]);
       const logsJson = (await logsRes.json()) as ApiResponse<SpendLog[]>;
@@ -177,8 +177,8 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
       if (isAdmin) {
         try {
           const [healthRes, metricsRes, cwRes] = await Promise.all([
-            fetch("/api/litellm?action=system_health"),
-            fetch(`/api/litellm?action=model_metrics&start_date=${weekAgo}&end_date=${tomorrow}`),
+            fetch("/api/usage?action=system_health"),
+            fetch(`/api/usage?action=model_metrics&start_date=${weekAgo}&end_date=${tomorrow}`),
             fetch("/api/container-metrics?action=current"),
           ]);
           if (healthRes.ok) { const j = (await healthRes.json()) as ApiResponse<SystemHealth>; setSystemHealth(j.data ?? null); }

@@ -9,6 +9,7 @@ import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
@@ -20,10 +21,14 @@ export interface DashboardStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   dashboardEc2Role: iam.Role;
   dashboardCertificateArn?: string;
-  hostedZone: route53.IHostedZone;
-  cloudfrontSecret: secretsmanager.Secret;
+  cloudfrontCertificateArn?: string;  // ACM cert in us-east-1 for CloudFront custom domain
+  hostedZone?: route53.IHostedZone;
   userPool: cognito.UserPool;
-  userPoolClient: cognito.UserPoolClient;
+  sgOpen: ec2.ISecurityGroup;
+  sgRestricted: ec2.ISecurityGroup;
+  sgLocked: ec2.ISecurityGroup;
+  efsFileSystemId: string;
+  webAclArn?: string;
 }
 
 export class DashboardStack extends cdk.Stack {
@@ -31,14 +36,55 @@ export class DashboardStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config, vpc, encryptionKey, dashboardEc2Role,
-            dashboardCertificateArn, hostedZone, cloudfrontSecret,
-            userPool, userPoolClient } = props;
+            dashboardCertificateArn, cloudfrontCertificateArn,
+            userPool, webAclArn } = props;
+
+    // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
+    const hostedZone = config.hostedZoneId
+      ? route53.HostedZone.fromHostedZoneAttributes(this, 'ImportedHostedZone', {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.domainName,
+        })
+      : props.hostedZone!;
+
+    // S3 Deploy Bucket for dashboard app artifacts
+    const deployBucketName = `${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}`;
+    const deployBucket = new s3.Bucket(this, 'DeployBucket', {
+      bucketName: deployBucketName,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    // Use deterministic ARN to avoid cross-stack cyclic reference (dashboardEc2Role is from Security stack)
+    const deployBucketArn = `arn:aws:s3:::${deployBucketName}`;
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'DeployBucketRead',
+      actions: ['s3:GetObject', 's3:ListBucket'],
+      resources: [deployBucketArn, `${deployBucketArn}/*`],
+    }));
+
+    // SSM Parameter Store - read Cognito credentials at boot time
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'SsmParameterRead',
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: [`arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/*`],
+    }));
 
     // Dashboard EC2 Role - additional permissions for all dashboard features
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockAccess',
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+        'bedrock:Converse',
+        'bedrock:ConverseStream',
+      ],
+      // Region '*' is required: foundation-model ARNs are region-agnostic,
+      // and global.anthropic.claude-* inference profiles route cross-region by design.
+      resources: [
+        `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-*`,
+        `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+      ],
     }));
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'AgentCoreAccess',
@@ -119,18 +165,25 @@ export class DashboardStack extends cdk.Stack {
         '',
         '# Deploy Next.js app from S3',
         'mkdir -p /opt/dashboard',
-        `aws s3 cp s3://cc-on-bedrock-deploy-${cdk.Aws.ACCOUNT_ID}/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ${cdk.Aws.REGION}`,
+        `aws s3 cp s3://${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ${cdk.Aws.REGION}`,
         'tar xzf /tmp/dashboard-app.tar.gz -C /opt/dashboard',
         'rm /tmp/dashboard-app.tar.gz',
         '',
-        '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
-        `NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ${cdk.Aws.REGION} --query SecretString --output text 2>/dev/null || openssl rand -hex 32)`,
+        '# Next.js standalone: server.js is in .next/standalone/',
+        '# Copy static assets into standalone .next dir for self-contained serving',
+        'cp -r /opt/dashboard/.next/static /opt/dashboard/.next/standalone/.next/static',
         '',
-        '# Environment config',
-        'cat > /opt/dashboard/.env << ENVEOF',
+        '# Fetch secrets at runtime from SSM Parameter Store (secure, no hardcoding)',
+        `NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ${cdk.Aws.REGION} --query SecretString --output text 2>/dev/null || openssl rand -hex 32)`,
+        `COGNITO_CLIENT_ID_VAL=$(aws ssm get-parameter --name /cc-on-bedrock/cognito/client-id --region ${cdk.Aws.REGION} --query Parameter.Value --output text)`,
+        `COGNITO_CLIENT_SECRET_VAL=$(aws ssm get-parameter --name /cc-on-bedrock/cognito/client-secret --region ${cdk.Aws.REGION} --with-decryption --query Parameter.Value --output text)`,
+        '',
+        '# Environment config (written to standalone dir where server.js runs)',
+        'cat > /opt/dashboard/.next/standalone/.env << ENVEOF',
         `NEXTAUTH_URL=https://${config.dashboardSubdomain}.${config.domainName}`,
         'NEXTAUTH_SECRET=$NEXTAUTH_SECRET_VAL',
-        `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
+        'COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID_VAL',
+        'COGNITO_CLIENT_SECRET=$COGNITO_CLIENT_SECRET_VAL',
         `COGNITO_ISSUER=https://cognito-idp.${cdk.Aws.REGION}.amazonaws.com/${userPool.userPoolId}`,
         `AWS_REGION=${cdk.Aws.REGION}`,
         `ECS_CLUSTER_NAME=${config.ecsClusterName}`,
@@ -141,12 +194,22 @@ export class DashboardStack extends cdk.Stack {
         'HOSTNAME=0.0.0.0',
         `VPC_ID=${vpc.vpcId}`,
         `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
+        `STORAGE_TYPE=${config.storageType}`,
+        `NEXT_PUBLIC_STORAGE_TYPE=${config.storageType}`,
+        `PRIVATE_SUBNET_IDS=${vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds.join(',')}`,
+        `SG_DEVENV_OPEN=${props.sgOpen.securityGroupId}`,
+        `SG_DEVENV_RESTRICTED=${props.sgRestricted.securityGroupId}`,
+        `SG_DEVENV_LOCKED=${props.sgLocked.securityGroupId}`,
+        `S3_SYNC_BUCKET=${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
+        `EFS_FILE_SYSTEM_ID=${props.efsFileSystemId}`,
+        'ROUTING_TABLE=cc-routing-table',
         'ENVEOF',
-        'chmod 600 /opt/dashboard/.env',
+        'chmod 600 /opt/dashboard/.next/standalone/.env',
         '',
-        '# Start Next.js',
-        'cd /opt/dashboard',
-        'pm2 start server.js --name dashboard --env production',
+        '# Load env vars and start Next.js from standalone directory',
+        'cd /opt/dashboard/.next/standalone',
+        'set -a && source .env && set +a',
+        'pm2 start server.js --name dashboard',
         'pm2 startup',
         'pm2 save',
       ].join('\n')),
@@ -172,54 +235,30 @@ export class DashboardStack extends cdk.Stack {
       },
     });
 
+    // ALB access is restricted to CloudFront via Prefix List on SG (no secret header needed)
     if (dashboardCertificateArn) {
-      const httpsListener = alb.addListener('HttpsListener', {
+      alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [elbv2.ListenerCertificate.fromArn(dashboardCertificateArn)],
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-      // Only allow traffic with valid X-Custom-Secret header from CloudFront
-      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
-        listener: httpsListener,
-        priority: 1,
-        conditions: [
-          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
-        ],
-        targetGroups: [targetGroup],
+        defaultTargetGroups: [targetGroup],
       });
     } else {
-      const httpListener = alb.addListener('HttpListener', {
+      alb.addListener('HttpListener', {
         port: 80,
         protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
-        listener: httpListener,
-        priority: 1,
-        conditions: [
-          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
-        ],
-        targetGroups: [targetGroup],
+        defaultTargetGroups: [targetGroup],
       });
     }
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DashboardCf', {
+      webAclId: webAclArn,
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(alb, {
           protocolPolicy: dashboardCertificateArn
             ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
             : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          customHeaders: {
-            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
-          },
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
@@ -227,6 +266,10 @@ export class DashboardStack extends cdk.Stack {
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       },
       comment: 'CC-on-Bedrock Dashboard',
+      ...(cloudfrontCertificateArn ? {
+        domainNames: [`${config.dashboardSubdomain}.${config.domainName}`],
+        certificate: acm.Certificate.fromCertificateArn(this, 'CfCert', cloudfrontCertificateArn),
+      } : {}),
     });
 
     // Route 53 Record

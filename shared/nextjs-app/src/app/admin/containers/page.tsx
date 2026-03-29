@@ -19,7 +19,7 @@ export default async function ContainersPage() {
         </p>
       </div>
       <ContainerManagement
-        domainName={process.env.DOMAIN_NAME ?? "example.com"}
+        domainName={process.env.DOMAIN_NAME ?? "atomai.click"}
         devSubdomain={process.env.DEV_SUBDOMAIN ?? "dev"}
       />
     </div>

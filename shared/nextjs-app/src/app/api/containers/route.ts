@@ -6,12 +6,13 @@ import {
   stopContainer,
   listContainers,
   describeContainer,
-  registerContainerInAlb,
-  deregisterContainerFromAlb,
+  registerContainerRoute,
+  deregisterContainerRoute,
 } from "@/lib/aws-clients";
 import { EFSClient, DescribeFileSystemsCommand } from "@aws-sdk/client-efs";
 import { ECSClient, ExecuteCommandCommand, ListTasksCommand, DescribeTasksCommand } from "@aws-sdk/client-ecs";
 import type { StartContainerInput, StopContainerInput } from "@/lib/types";
+import { startContainerSchema, stopContainerSchema } from "@/lib/validation";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const efsClient = new EFSClient({ region });
@@ -81,6 +82,9 @@ export async function GET(req: NextRequest) {
 
     // EFS metrics endpoint
     if (action === "efs") {
+      if (!EFS_ID) {
+        return NextResponse.json({ success: true, data: null });
+      }
       const [efsResp, perUser] = await Promise.all([
         efsClient.send(new DescribeFileSystemsCommand({ FileSystemId: EFS_ID })),
         getPerUserEfsUsage(),
@@ -122,26 +126,33 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const body = (await req.json()) as StartContainerInput;
+    const raw = await req.json();
+    const parsed = startContainerSchema.safeParse(raw);
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    const body = parsed.data;
     const taskArn = await startContainer(body);
 
-    // Auto-register in ALB after a short delay for IP assignment
-    // Run in background - don't block the response
-    setTimeout(async () => {
+    // Route registration runs async but with proper error tracking.
+    // Safe on EC2-hosted Next.js (long-lived process); not safe on Lambda/Edge.
+    void (async () => {
       try {
-        // Wait for task to get an IP (up to 30s)
+        await new Promise((r) => setTimeout(r, 2000));
         for (let i = 0; i < 6; i++) {
           await new Promise((r) => setTimeout(r, 5000));
           const info = await describeContainer(taskArn);
           if (info?.privateIp) {
-            await registerContainerInAlb(body.subdomain, info.privateIp);
-            break;
+            await registerContainerRoute(body.subdomain, info.privateIp);
+            console.log(`[containers] Route registered: ${body.subdomain} → ${info.privateIp}`);
+            return;
           }
         }
+        console.warn(`[containers] Route register timeout: no IP after 30s for ${body.subdomain}`);
       } catch (err) {
-        console.error("[containers] ALB register failed:", err);
+        console.error(`[containers] Route register failed for ${body.subdomain}:`, err);
       }
-    }, 2000);
+    })();
 
     return NextResponse.json({ success: true, data: { taskArn } });
   } catch (err) {
@@ -162,14 +173,19 @@ export async function DELETE(req: NextRequest) {
   }
 
   try {
-    const body = (await req.json()) as StopContainerInput & { subdomain?: string };
+    const raw = await req.json();
+    const parsed = stopContainerSchema.safeParse(raw);
+    if (!parsed.success) {
+      return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });
+    }
+    const body = parsed.data;
 
-    // Deregister from ALB before stopping
+    // Deregister route before stopping
     if (body.subdomain) {
       try {
-        await deregisterContainerFromAlb(body.subdomain);
+        await deregisterContainerRoute(body.subdomain);
       } catch (err) {
-        console.warn("[containers] ALB deregister:", err);
+        console.warn("[containers] Route deregister:", err);
       }
     }
 

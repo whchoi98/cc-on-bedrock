@@ -26,10 +26,6 @@ variable "kms_key_id" {
   type = string
 }
 
-variable "litellm_alb_dns" {
-  type = string
-}
-
 variable "devenv_certificate_arn" {
   type = string
 }

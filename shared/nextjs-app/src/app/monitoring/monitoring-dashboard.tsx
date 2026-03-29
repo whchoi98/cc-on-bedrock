@@ -79,7 +79,7 @@ function UtilizationBar({ label, used, total, unit, color }: {
 }
 
 export default function MonitoringDashboard({
-  domainName = "example.com",
+  domainName = "atomai.click",
   devSubdomain = "dev",
 }: MonitoringDashboardProps) {
   const { t, locale } = useI18n();
@@ -96,12 +96,11 @@ export default function MonitoringDashboard({
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const [healthRes, containersRes, sysRes] = await Promise.all([
         fetch("/api/health"),
         fetch("/api/containers"),
-        fetch("/api/litellm?action=system_health"),
+        fetch("/api/usage?action=system_health"),
       ]);
 
       const healthJson = (await healthRes.json()) as {

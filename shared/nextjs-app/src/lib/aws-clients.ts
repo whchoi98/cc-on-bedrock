@@ -16,7 +16,14 @@ import {
   StopTaskCommand,
   DescribeTasksCommand,
   ListTasksCommand,
+  RegisterTaskDefinitionCommand,
+  DescribeTaskDefinitionCommand,
 } from "@aws-sdk/client-ecs";
+import {
+  EFSClient,
+  CreateAccessPointCommand,
+  DescribeAccessPointsCommand,
+} from "@aws-sdk/client-efs";
 import {
   ElasticLoadBalancingV2Client,
   CreateTargetGroupCommand,
@@ -43,19 +50,36 @@ import {
   PutRolePolicyCommand,
   GetRoleCommand,
 } from "@aws-sdk/client-iam";
+import {
+  LambdaClient,
+  InvokeCommand,
+} from "@aws-sdk/client-lambda";
+import {
+  SecretsManagerClient,
+  CreateSecretCommand,
+  PutSecretValueCommand,
+  GetSecretValueCommand,
+} from "@aws-sdk/client-secrets-manager";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
 const ecsCluster = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-cluster";
-const domainName = process.env.DOMAIN_NAME ?? "example.com";
+const domainName = process.env.DOMAIN_NAME ?? "atomai.click";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
 const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
+const lambdaClient = new LambdaClient({ region });
+const s3SyncBucket = process.env.S3_SYNC_BUCKET ?? "";
+
+const MAX_COGNITO_PAGES = 20;
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
 const elbv2Client = new ElasticLoadBalancingV2Client({ region });
 const iamClient = new IAMClient({ region });
+const secretsClient = new SecretsManagerClient({ region });
+const efsClientSdk = new EFSClient({ region });
+const efsFileSystemId = process.env.EFS_FILE_SYSTEM_ID ?? "";
 
 const devenvAlbListenerArn = process.env.DEVENV_ALB_LISTENER_ARN ?? "";
 const vpcId = process.env.VPC_ID ?? "";
@@ -88,6 +112,7 @@ function toCognitoUser(user: {
     containerOs: (getAttr(attrs, "custom:container_os") as CognitoUser["containerOs"]) ?? "ubuntu",
     resourceTier: (getAttr(attrs, "custom:resource_tier") as CognitoUser["resourceTier"]) ?? "standard",
     securityPolicy: (getAttr(attrs, "custom:security_policy") as CognitoUser["securityPolicy"]) ?? "restricted",
+    storageType: (getAttr(attrs, "custom:storage_type") as CognitoUser["storageType"]) ?? "ebs",
     litellmApiKey: getAttr(attrs, "custom:litellm_api_key"),
     containerId: getAttr(attrs, "custom:container_id"),
     groups: [],
@@ -97,13 +122,22 @@ function toCognitoUser(user: {
 // ─── Cognito: User CRUD ───
 
 export async function listCognitoUsers(): Promise<CognitoUser[]> {
-  const result = await cognitoClient.send(
-    new ListUsersCommand({
-      UserPoolId: userPoolId,
-      Limit: 60,
-    })
-  );
-  return (result.Users ?? []).map(toCognitoUser);
+  const allUsers: CognitoUser[] = [];
+  let paginationToken: string | undefined;
+  let pages = 0;
+  do {
+    const result = await cognitoClient.send(
+      new ListUsersCommand({
+        UserPoolId: userPoolId,
+        Limit: 60,
+        PaginationToken: paginationToken,
+      })
+    );
+    allUsers.push(...(result.Users ?? []).map(toCognitoUser));
+    paginationToken = result.PaginationToken;
+    pages++;
+  } while (paginationToken && pages < MAX_COGNITO_PAGES);
+  return allUsers;
 }
 
 export async function getCognitoUser(username: string): Promise<CognitoUser> {
@@ -125,10 +159,14 @@ export async function getCognitoUser(username: string): Promise<CognitoUser> {
 export async function createCognitoUser(
   input: CreateUserInput
 ): Promise<CognitoUser> {
+  // Generate initial temporary password for both Cognito and code-server
+  const tempPassword = require("crypto").randomBytes(12).toString("base64").slice(0, 16) + "A1!";
+
   const result = await cognitoClient.send(
     new AdminCreateUserCommand({
       UserPoolId: userPoolId,
       Username: input.email,
+      TemporaryPassword: tempPassword,
       UserAttributes: [
         { Name: "email", Value: input.email },
         { Name: "email_verified", Value: "true" },
@@ -137,10 +175,30 @@ export async function createCognitoUser(
         { Name: "custom:container_os", Value: input.containerOs },
         { Name: "custom:resource_tier", Value: input.resourceTier },
         { Name: "custom:security_policy", Value: input.securityPolicy },
+        { Name: "custom:storage_type", Value: input.storageType },
       ],
       DesiredDeliveryMediums: ["EMAIL"],
     })
   );
+
+  // Store initial password in Secrets Manager for code-server sync
+  const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  try {
+    await secretsClient.send(new PutSecretValueCommand({
+      SecretId: secretName,
+      SecretString: tempPassword,
+    }));
+  } catch {
+    try {
+      await secretsClient.send(new CreateSecretCommand({
+        Name: secretName,
+        SecretString: tempPassword,
+        Description: `code-server password for ${input.subdomain}`,
+      }));
+    } catch (smErr) {
+      console.warn(`[createCognitoUser] Failed to store initial code-server password:`, smErr);
+    }
+  }
 
   // Add to 'user' group by default
   await cognitoClient.send(
@@ -172,6 +230,11 @@ export async function updateCognitoUser(
     attrs.push({
       Name: "custom:security_policy",
       Value: input.securityPolicy,
+    });
+  if (input.storageType)
+    attrs.push({
+      Name: "custom:storage_type",
+      Value: input.storageType,
     });
 
   if (attrs.length > 0) {
@@ -261,11 +324,12 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
           Action: "sts:AssumeRole",
         }],
       }),
+      PermissionsBoundary: `arn:aws:iam::${accountId}:policy/cc-on-bedrock-task-boundary`,
       Description: `Per-user ECS Task Role for ${subdomain}`,
       Tags: [{ Key: "cc-on-bedrock", Value: "user-task-role" }, { Key: "subdomain", Value: subdomain }],
     }));
 
-    // Attach Bedrock + basic permissions
+    // Attach scoped Bedrock + S3 + Logs + ECR + Secrets permissions
     await iamClient.send(new PutRolePolicyCommand({
       RoleName: roleName,
       PolicyName: "BedrockAccess",
@@ -273,37 +337,102 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
         Version: "2012-10-17",
         Statement: [
           {
+            Sid: "BedrockClaude",
             Effect: "Allow",
             Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
-            Resource: "*",
+            Resource: [
+              `arn:aws:bedrock:${region}::foundation-model/anthropic.claude-*`,
+              `arn:aws:bedrock:${region}:${accountId}:inference-profile/*anthropic.claude-*`,
+            ],
           },
           {
+            Sid: "S3UserData",
             Effect: "Allow",
             Action: ["s3:GetObject", "s3:PutObject"],
-            Resource: `arn:aws:s3:::cc-on-bedrock-*/*`,
+            Resource: [
+              `arn:aws:s3:::cc-on-bedrock-user-data-${accountId}`,
+              `arn:aws:s3:::cc-on-bedrock-user-data-${accountId}/users/${subdomain}/*`,
+            ],
           },
           {
+            Sid: "CloudWatchLogs",
             Effect: "Allow",
             Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
+            Resource: `arn:aws:logs:*:${accountId}:log-group:/cc-on-bedrock/*`,
+          },
+          {
+            Sid: "EcrAuth",
+            Effect: "Allow",
+            Action: ["ecr:GetAuthorizationToken"],
             Resource: "*",
           },
           {
+            Sid: "EcrPull",
             Effect: "Allow",
-            Action: ["ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
-            Resource: "*",
+            Action: ["ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
+            Resource: `arn:aws:ecr:${region}:${accountId}:repository/cc-on-bedrock/*`,
+          },
+          {
+            Sid: "SecretsRead",
+            Effect: "Allow",
+            Action: ["secretsmanager:GetSecretValue"],
+            Resource: `arn:aws:secretsmanager:${region}:${accountId}:secret:cc-on-bedrock/codeserver/*`,
           },
         ],
       }),
     }));
 
     console.log(`[IAM] Created per-user role: ${roleName}`);
-    // Wait for IAM propagation
-    await new Promise((r) => setTimeout(r, 3000));
+    // Wait for IAM propagation (ECS needs role to be fully available)
+    await new Promise((r) => setTimeout(r, 10000));
     return roleArn;
   } catch (err) {
     console.error(`[IAM] Failed to create role ${roleName}:`, err);
     // Fallback to shared role
     return `arn:aws:iam::${accountId}:role/cc-on-bedrock-ecs-task`;
+  }
+}
+
+// ─── Per-user EFS Access Point for file isolation ───
+
+async function ensureUserAccessPoint(subdomain: string): Promise<string> {
+  if (!efsFileSystemId) return "";
+
+  try {
+    const existing = await efsClientSdk.send(new DescribeAccessPointsCommand({
+      FileSystemId: efsFileSystemId,
+    }));
+    const userAp = existing.AccessPoints?.find(
+      ap => ap.RootDirectory?.Path === `/users/${subdomain}`
+    );
+    if (userAp?.AccessPointId) return userAp.AccessPointId;
+  } catch (err) {
+    console.error(`[EFS] Describe access points failed:`, err);
+  }
+
+  try {
+    const result = await efsClientSdk.send(new CreateAccessPointCommand({
+      FileSystemId: efsFileSystemId,
+      PosixUser: { Uid: 1001, Gid: 1001 },
+      RootDirectory: {
+        Path: `/users/${subdomain}`,
+        CreationInfo: {
+          OwnerUid: 1001,
+          OwnerGid: 1001,
+          Permissions: "0755",
+        },
+      },
+      Tags: [
+        { Key: "Name", Value: `cc-devenv-${subdomain}` },
+        { Key: "managed_by", Value: "cc-on-bedrock" },
+        { Key: "subdomain", Value: subdomain },
+      ],
+    }));
+    console.log(`[EFS] Created access point for ${subdomain}: ${result.AccessPointId}`);
+    return result.AccessPointId ?? "";
+  } catch (err) {
+    console.error(`[EFS] Create access point failed for ${subdomain}:`, err);
+    return "";
   }
 }
 
@@ -340,10 +469,75 @@ export async function startContainer(
   // Create or get per-user IAM Task Role for budget control
   const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
 
+  // Create or get per-user EFS Access Point for file isolation
+  const accessPointId = await ensureUserAccessPoint(input.subdomain);
+
+  // If access point available, register task def revision with EFS isolation
+  let finalTaskDefinition = taskDefinition;
+  if (accessPointId) {
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({
+        taskDefinition,
+      }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: "/",
+                transitEncryption: "ENABLED" as const,
+                authorizationConfig: {
+                  accessPointId,
+                  iam: "ENABLED" as const,
+                },
+              },
+            };
+          }
+          return v;
+        });
+
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+        console.log(`[EFS] Registered task def with access point: ${finalTaskDefinition}`);
+      }
+    } catch (err) {
+      console.warn(`[EFS] Task def registration failed, using default:`, err);
+    }
+  }
+
+  // Generate per-user code-server password and store in Secrets Manager
+  const codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  try {
+    await secretsClient.send(new PutSecretValueCommand({
+      SecretId: secretName,
+      SecretString: codeserverPassword,
+    }));
+  } catch {
+    // Secret doesn't exist yet — create it
+    await secretsClient.send(new CreateSecretCommand({
+      Name: secretName,
+      SecretString: codeserverPassword,
+      Description: `code-server password for ${input.subdomain}`,
+    }));
+  }
+  const secretArn = `arn:aws:secretsmanager:${region}:${accountId}:secret:${secretName}`;
+
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
-      taskDefinition,
+      taskDefinition: finalTaskDefinition,
       count: 1,
       launchType: "EC2",
       enableExecuteCommand: true,
@@ -364,8 +558,10 @@ export async function startContainer(
               // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
-              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? "CcOnBedrock2026!" },
+              // Password stored in Secrets Manager — pass ARN only (entrypoint fetches actual value)
+              { name: "CODESERVER_SECRET_ARN", value: secretArn },
               { name: "AWS_DEFAULT_REGION", value: region },
+              ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
             ],
           },
         ],
@@ -374,6 +570,8 @@ export async function startContainer(
         { key: "username", value: input.username },
         { key: "subdomain", value: input.subdomain },
         { key: "department", value: input.department },
+        { key: "securityPolicy", value: input.securityPolicy },
+        { key: "storageType", value: input.storageType ?? "efs" },
         { key: "domain", value: `${input.subdomain}.${devSubdomain}.${domainName}` },
       ],
     })
@@ -383,6 +581,144 @@ export async function startContainer(
   if (!taskArn) {
     throw new Error("Failed to start container: no task ARN returned");
   }
+  return taskArn;
+}
+
+type ProgressCallback = (step: number, name: string, status: string, message?: string) => void;
+
+export async function startContainerWithProgress(
+  input: StartContainerInput,
+  onProgress: ProgressCallback
+): Promise<string> {
+  const taskDefKey = `${input.containerOs}-${input.resourceTier}`;
+  const taskDefinition = TASK_DEFINITION_MAP[taskDefKey];
+  if (!taskDefinition) {
+    throw new Error(`Invalid container config: ${taskDefKey}`);
+  }
+
+  const securityGroup = SECURITY_GROUP_MAP[input.securityPolicy];
+
+  // Step 1: IAM Role
+  onProgress(1, "iam_role", "in_progress", "Creating per-user IAM role...");
+  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
+  onProgress(1, "iam_role", "completed", "IAM role ready");
+
+  // Step 2: EFS Access Point
+  onProgress(2, "efs_access_point", "in_progress", "Creating EFS access point...");
+  const accessPointId = await ensureUserAccessPoint(input.subdomain);
+  onProgress(2, "efs_access_point", "completed", "EFS access point ready");
+
+  // Step 3: Task Definition
+  onProgress(3, "task_definition", "in_progress", "Registering task definition...");
+  let finalTaskDefinition = taskDefinition;
+  if (accessPointId) {
+    try {
+      const descResult = await ecsClient.send(new DescribeTaskDefinitionCommand({ taskDefinition }));
+      const td = descResult.taskDefinition;
+      if (td) {
+        const volumes = (td.volumes ?? []).map(v => {
+          if (v.name === "efs-workspace" && v.efsVolumeConfiguration) {
+            return {
+              ...v,
+              efsVolumeConfiguration: {
+                ...v.efsVolumeConfiguration,
+                rootDirectory: "/",
+                transitEncryption: "ENABLED" as const,
+                authorizationConfig: { accessPointId, iam: "ENABLED" as const },
+              },
+            };
+          }
+          return v;
+        });
+        const regResult = await ecsClient.send(new RegisterTaskDefinitionCommand({
+          family: td.family,
+          taskRoleArn: userTaskRoleArn,
+          executionRoleArn: td.executionRoleArn,
+          networkMode: td.networkMode,
+          containerDefinitions: td.containerDefinitions,
+          volumes,
+          requiresCompatibilities: td.requiresCompatibilities,
+        }));
+        finalTaskDefinition = `${regResult.taskDefinition?.family}:${regResult.taskDefinition?.revision}`;
+      }
+    } catch (err) {
+      console.warn(`[SSE] Task def registration failed, using default:`, err);
+    }
+  }
+  onProgress(3, "task_definition", "completed", "Task definition registered");
+
+  // Step 4: Password Store
+  onProgress(4, "password_store", "in_progress", "Storing code-server password...");
+  const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  let codeserverPassword: string;
+  try {
+    // Try to read existing password first
+    const existing = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretName }));
+    codeserverPassword = existing.SecretString ?? require("crypto").randomBytes(16).toString("hex");
+  } catch {
+    // No existing password — generate a new one
+    codeserverPassword = require("crypto").randomBytes(16).toString("hex");
+  }
+  try {
+    await secretsClient.send(new PutSecretValueCommand({ SecretId: secretName, SecretString: codeserverPassword }));
+  } catch {
+    await secretsClient.send(new CreateSecretCommand({
+      Name: secretName,
+      SecretString: codeserverPassword,
+      Description: `code-server password for ${input.subdomain}`,
+    }));
+  }
+  const secretArn = `arn:aws:secretsmanager:${region}:${accountId}:secret:${secretName}`;
+  onProgress(4, "password_store", "completed", "Password stored");
+
+  // Step 5: Container Start
+  onProgress(5, "container_start", "in_progress", "Starting ECS task...");
+  const result = await ecsClient.send(
+    new RunTaskCommand({
+      cluster: ecsCluster,
+      taskDefinition: finalTaskDefinition,
+      count: 1,
+      launchType: "EC2",
+      enableExecuteCommand: true,
+      networkConfiguration: {
+        awsvpcConfiguration: {
+          subnets: (process.env.PRIVATE_SUBNET_IDS ?? "").split(","),
+          securityGroups: securityGroup ? [securityGroup] : [],
+          assignPublicIp: "DISABLED",
+        },
+      },
+      overrides: {
+        taskRoleArn: userTaskRoleArn,
+        containerOverrides: [
+          {
+            name: "devenv",
+            environment: [
+              { name: "SECURITY_POLICY", value: input.securityPolicy },
+              { name: "USER_SUBDOMAIN", value: input.subdomain },
+              { name: "CODESERVER_SECRET_ARN", value: secretArn },
+              { name: "AWS_DEFAULT_REGION", value: region },
+              ...(s3SyncBucket ? [{ name: "S3_SYNC_BUCKET", value: s3SyncBucket }] : []),
+            ],
+          },
+        ],
+      },
+      tags: [
+        { key: "username", value: input.username },
+        { key: "subdomain", value: input.subdomain },
+        { key: "department", value: input.department },
+        { key: "securityPolicy", value: input.securityPolicy },
+        { key: "storageType", value: input.storageType ?? "efs" },
+        { key: "domain", value: `${input.subdomain}.${devSubdomain}.${domainName}` },
+      ],
+    })
+  );
+
+  const taskArn = result.tasks?.[0]?.taskArn;
+  if (!taskArn) {
+    throw new Error("Failed to start container: no task ARN returned");
+  }
+  onProgress(5, "container_start", "completed", `Task started: ${taskArn.split("/").pop()}`);
+
   return taskArn;
 }
 
@@ -441,7 +777,8 @@ export async function listContainers(): Promise<ContainerInfo[]> {
       subdomain: getTag("subdomain"),
       containerOs,
       resourceTier,
-      securityPolicy: "restricted" as ContainerInfo["securityPolicy"],
+      securityPolicy: (getTag("securityPolicy") || "restricted") as ContainerInfo["securityPolicy"],
+      storageType: (getTag("storageType") || undefined) as ContainerInfo["storageType"],
       cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
       memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
       createdAt: task.createdAt?.toISOString() ?? "",
@@ -495,7 +832,8 @@ export async function describeContainer(
     subdomain: getTag("subdomain"),
     containerOs,
     resourceTier,
-    securityPolicy: "restricted",
+    securityPolicy: (getTag("securityPolicy") || "restricted") as ContainerInfo["securityPolicy"],
+    storageType: (getTag("storageType") || undefined) as ContainerInfo["storageType"],
     cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
     memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
     createdAt: task.createdAt?.toISOString() ?? "",
@@ -510,9 +848,50 @@ export async function describeContainer(
   };
 }
 
-// ─── ALB Target Auto-Registration ───
+// ─── DynamoDB Routing Table ───
 
-export async function registerContainerInAlb(
+const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
+
+export async function registerContainerRoute(
+  subdomain: string,
+  privateIp: string
+): Promise<void> {
+  const { DynamoDBClient, PutItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  await ddb.send(new PutItemCommand({
+    TableName: ROUTING_TABLE,
+    Item: {
+      subdomain: { S: subdomain },
+      targetIp: { S: privateIp },
+      port: { N: "8080" },
+      status: { S: "active" },
+      updatedAt: { S: new Date().toISOString() },
+      domain: { S: `${subdomain}.${devSubdomain}.${domainName}` },
+    },
+  }));
+
+  console.log(`[Routing] Registered: ${subdomain} → ${privateIp}:8080`);
+}
+
+export async function deregisterContainerRoute(
+  subdomain: string
+): Promise<void> {
+  const { DynamoDBClient, DeleteItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  await ddb.send(new DeleteItemCommand({
+    TableName: ROUTING_TABLE,
+    Key: { subdomain: { S: subdomain } },
+  }));
+
+  console.log(`[Routing] Deregistered: ${subdomain}`);
+}
+
+// ─── ALB Target Auto-Registration (DEPRECATED: use registerContainerRoute / deregisterContainerRoute) ───
+
+/** @deprecated Use registerContainerRoute instead */
+export async function registerContainerInAlb_legacy(
   subdomain: string,
   privateIp: string
 ): Promise<void> {
@@ -603,7 +982,8 @@ export async function registerContainerInAlb(
   console.log(`[ALB] Registered ${subdomain} → ${privateIp}:8080`);
 }
 
-export async function deregisterContainerFromAlb(
+/** @deprecated Use deregisterContainerRoute instead */
+export async function deregisterContainerFromAlb_legacy(
   subdomain: string
 ): Promise<void> {
   try {
