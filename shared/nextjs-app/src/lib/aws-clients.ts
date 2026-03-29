@@ -18,17 +18,10 @@ import {
   ListTasksCommand,
 } from "@aws-sdk/client-ecs";
 import {
-  ElasticLoadBalancingV2Client,
-  CreateTargetGroupCommand,
-  RegisterTargetsCommand,
-  DeregisterTargetsCommand,
-  CreateRuleCommand,
-  DeleteRuleCommand,
-  DescribeTargetGroupsCommand,
-  DescribeTargetHealthCommand,
-  DescribeRulesCommand,
-  DeleteTargetGroupCommand,
-} from "@aws-sdk/client-elastic-load-balancing-v2";
+  DynamoDBClient,
+  PutItemCommand,
+  DeleteItemCommand,
+} from "@aws-sdk/client-dynamodb";
 import type {
   CognitoUser,
   CreateUserInput,
@@ -54,11 +47,10 @@ const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
-const elbv2Client = new ElasticLoadBalancingV2Client({ region });
+const dynamoClient = new DynamoDBClient({ region });
 const iamClient = new IAMClient({ region });
 
-const devenvAlbListenerArn = process.env.DEVENV_ALB_LISTENER_ARN ?? "";
-const vpcId = process.env.VPC_ID ?? "";
+const routingTableName = process.env.ROUTING_TABLE_NAME ?? "cc-routing-table";
 
 // ─── Helper: Parse Cognito attributes ───
 
@@ -515,134 +507,36 @@ export async function describeContainer(
   };
 }
 
-// ─── ALB Target Auto-Registration ───
+// ─── DynamoDB Routing Table (replaces ALB listener rules) ───
+// Nginx polls S3 config generated from this table by nginx-config-gen Lambda
 
-export async function registerContainerInAlb(
+export async function registerContainerRoute(
   subdomain: string,
   privateIp: string
 ): Promise<void> {
-  if (!devenvAlbListenerArn || !vpcId) {
-    console.warn("[ALB] Missing DEVENV_ALB_LISTENER_ARN or VPC_ID");
-    return;
-  }
-
-  const tgName = `devenv-${subdomain}`;
-
-  // Check if target group exists
-  let tgArn: string | undefined;
-  try {
-    const existing = await elbv2Client.send(
-      new DescribeTargetGroupsCommand({ Names: [tgName] })
-    );
-    tgArn = existing.TargetGroups?.[0]?.TargetGroupArn;
-  } catch {
-    // Target group doesn't exist, create it
-  }
-
-  if (!tgArn) {
-    const createResult = await elbv2Client.send(
-      new CreateTargetGroupCommand({
-        Name: tgName,
-        Protocol: "HTTP",
-        Port: 8080,
-        VpcId: vpcId,
-        TargetType: "ip",
-        HealthCheckPath: "/",
-        HealthCheckIntervalSeconds: 30,
-        HealthyThresholdCount: 2,
-        UnhealthyThresholdCount: 3,
-        Matcher: { HttpCode: "200-399" },
-      })
-    );
-    tgArn = createResult.TargetGroups?.[0]?.TargetGroupArn;
-    if (!tgArn) throw new Error("Failed to create target group");
-
-    // Find next available priority
-    const rules = await elbv2Client.send(
-      new DescribeRulesCommand({ ListenerArn: devenvAlbListenerArn })
-    );
-    const usedPriorities = (rules.Rules ?? [])
-      .map((r) => parseInt(r.Priority ?? "0", 10))
-      .filter((p) => !isNaN(p));
-    const nextPriority = Math.max(...usedPriorities, 0) + 1;
-
-    // Create listener rule with host-header + X-Custom-Secret validation
-    const conditions: Record<string, unknown>[] = [
-      { Field: "host-header", Values: [`${subdomain}.${devSubdomain}.${domainName}`] },
-    ];
-    const cfSecret = process.env.CLOUDFRONT_SECRET;
-    if (cfSecret) {
-      conditions.push({
-        Field: "http-header",
-        HttpHeaderConfig: { HttpHeaderName: "X-Custom-Secret", Values: [cfSecret] },
-      });
-    }
-    await elbv2Client.send(
-      new CreateRuleCommand({
-        ListenerArn: devenvAlbListenerArn,
-        Priority: nextPriority,
-        Conditions: conditions,
-        Actions: [{ Type: "forward", TargetGroupArn: tgArn }],
-      })
-    );
-  }
-
-  // Deregister stale targets before registering new IP
-  try {
-    const health = await elbv2Client.send(
-      new DescribeTargetHealthCommand({ TargetGroupArn: tgArn })
-    );
-    const staleTargets = (health.TargetHealthDescriptions ?? [])
-      .filter((t) => t.Target?.Id !== privateIp)
-      .map((t) => ({ Id: t.Target!.Id!, Port: t.Target!.Port! }));
-    if (staleTargets.length > 0) {
-      await elbv2Client.send(
-        new DeregisterTargetsCommand({ TargetGroupArn: tgArn, Targets: staleTargets })
-      );
-      console.log(`[ALB] Deregistered ${staleTargets.length} stale target(s) from ${subdomain}`);
-    }
-  } catch (err) {
-    console.warn(`[ALB] Stale target cleanup for ${subdomain}:`, err);
-  }
-
-  // Register the container IP
-  await elbv2Client.send(
-    new RegisterTargetsCommand({
-      TargetGroupArn: tgArn,
-      Targets: [{ Id: privateIp, Port: 8080 }],
-    })
-  );
-
-  console.log(`[ALB] Registered ${subdomain} → ${privateIp}:8080`);
+  await dynamoClient.send(new PutItemCommand({
+    TableName: routingTableName,
+    Item: {
+      subdomain: { S: subdomain },
+      container_ip: { S: privateIp },
+      port: { N: "8080" },
+      status: { S: "active" },
+      updated_at: { S: new Date().toISOString() },
+    },
+  }));
+  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080`);
 }
 
-export async function deregisterContainerFromAlb(
+export async function deregisterContainerRoute(
   subdomain: string
 ): Promise<void> {
   try {
-    const tgName = `devenv-${subdomain}`;
-    const existing = await elbv2Client.send(
-      new DescribeTargetGroupsCommand({ Names: [tgName] })
-    );
-    const tgArn = existing.TargetGroups?.[0]?.TargetGroupArn;
-    if (!tgArn) return;
-
-    // Find and delete the listener rule
-    if (devenvAlbListenerArn) {
-      const rules = await elbv2Client.send(
-        new DescribeRulesCommand({ ListenerArn: devenvAlbListenerArn })
-      );
-      for (const rule of rules.Rules ?? []) {
-        if (rule.Actions?.some((a) => a.TargetGroupArn === tgArn) && !rule.IsDefault) {
-          await elbv2Client.send(new DeleteRuleCommand({ RuleArn: rule.RuleArn }));
-        }
-      }
-    }
-
-    // Delete target group
-    await elbv2Client.send(new DeleteTargetGroupCommand({ TargetGroupArn: tgArn }));
-    console.log(`[ALB] Deregistered ${subdomain}`);
+    await dynamoClient.send(new DeleteItemCommand({
+      TableName: routingTableName,
+      Key: { subdomain: { S: subdomain } },
+    }));
+    console.log(`[Routing] Deregistered ${subdomain}`);
   } catch (err) {
-    console.warn(`[ALB] Deregister ${subdomain} failed:`, err);
+    console.warn(`[Routing] Deregister ${subdomain} failed:`, err);
   }
 }

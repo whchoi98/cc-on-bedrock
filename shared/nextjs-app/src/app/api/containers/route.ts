@@ -6,8 +6,8 @@ import {
   stopContainer,
   listContainers,
   describeContainer,
-  registerContainerInAlb,
-  deregisterContainerFromAlb,
+  registerContainerRoute,
+  deregisterContainerRoute,
 } from "@/lib/aws-clients";
 import { EFSClient, DescribeFileSystemsCommand } from "@aws-sdk/client-efs";
 import { ECSClient, ExecuteCommandCommand, ListTasksCommand, DescribeTasksCommand } from "@aws-sdk/client-ecs";
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
           await new Promise((r) => setTimeout(r, 5000));
           const info = await describeContainer(taskArn);
           if (info?.privateIp) {
-            await registerContainerInAlb(body.subdomain, info.privateIp);
+            await registerContainerRoute(body.subdomain, info.privateIp);
             break;
           }
         }
@@ -167,7 +167,7 @@ export async function DELETE(req: NextRequest) {
     // Deregister from ALB before stopping
     if (body.subdomain) {
       try {
-        await deregisterContainerFromAlb(body.subdomain);
+        await deregisterContainerRoute(body.subdomain);
       } catch (err) {
         console.warn("[containers] ALB deregister:", err);
       }

@@ -57,10 +57,9 @@ const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   env, config,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
-  devEnvCertificateArn: app.node.tryGetContext('devEnvCertArn'),
   hostedZone: networkStack.hostedZone,
   cloudfrontSecret: securityStack.cloudfrontSecret,
-  description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
+  description: 'CC-on-Bedrock: ECS Cluster, NLB+Nginx, DynamoDB Routing, CloudFront',
 });
 ecsDevenvStack.addDependency(securityStack);
 
