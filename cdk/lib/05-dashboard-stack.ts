@@ -65,6 +65,13 @@ export class DashboardStack extends cdk.Stack {
       resources: [deployBucketArn, `${deployBucketArn}/*`],
     }));
 
+    // SSM Parameter Store - read Cognito credentials at boot time
+    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'SsmParameterRead',
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: [`arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/*`],
+    }));
+
     // Dashboard EC2 Role - additional permissions for all dashboard features
     dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockAccess',
@@ -168,21 +175,16 @@ export class DashboardStack extends cdk.Stack {
         '# Copy static assets into standalone .next dir for self-contained serving',
         'cp -r /opt/dashboard/.next/static /opt/dashboard/.next/standalone/.next/static',
         '',
-        '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
+        '# Fetch secrets at runtime from SSM Parameter Store (secure, no hardcoding)',
         `NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ${cdk.Aws.REGION} --query SecretString --output text 2>/dev/null || openssl rand -hex 32)`,
-        `COGNITO_CLIENT_SECRET_VAL=$(aws cognito-idp describe-user-pool-client --user-pool-id ${userPool.userPoolId} --client-id ${userPoolClient.userPoolClientId} --region ${cdk.Aws.REGION} --query 'UserPoolClient.ClientSecret' --output text)`,
-        '',
-        '# Handle case where client has no secret (returns "None")',
-        'if [ "$COGNITO_CLIENT_SECRET_VAL" = "None" ] || [ -z "$COGNITO_CLIENT_SECRET_VAL" ]; then',
-        '  echo "WARNING: Cognito client has no secret. Ensure generateSecret is true in CDK."',
-        '  COGNITO_CLIENT_SECRET_VAL=""',
-        'fi',
+        `COGNITO_CLIENT_ID_VAL=$(aws ssm get-parameter --name /cc-on-bedrock/cognito/client-id --region ${cdk.Aws.REGION} --query Parameter.Value --output text)`,
+        `COGNITO_CLIENT_SECRET_VAL=$(aws ssm get-parameter --name /cc-on-bedrock/cognito/client-secret --region ${cdk.Aws.REGION} --with-decryption --query Parameter.Value --output text)`,
         '',
         '# Environment config (written to standalone dir where server.js runs)',
         'cat > /opt/dashboard/.next/standalone/.env << ENVEOF',
         `NEXTAUTH_URL=https://${config.dashboardSubdomain}.${config.domainName}`,
         'NEXTAUTH_SECRET=$NEXTAUTH_SECRET_VAL',
-        `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
+        'COGNITO_CLIENT_ID=$COGNITO_CLIENT_ID_VAL',
         'COGNITO_CLIENT_SECRET=$COGNITO_CLIENT_SECRET_VAL',
         `COGNITO_ISSUER=https://cognito-idp.${cdk.Aws.REGION}.amazonaws.com/${userPool.userPoolId}`,
         `AWS_REGION=${cdk.Aws.REGION}`,

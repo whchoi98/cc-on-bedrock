@@ -21,8 +21,24 @@ const config = {
   isolatedSubnetCidrA: app.node.tryGetContext('isolatedSubnetCidrA') ?? defaultConfig.isolatedSubnetCidrA,
   isolatedSubnetCidrC: app.node.tryGetContext('isolatedSubnetCidrC') ?? defaultConfig.isolatedSubnetCidrC,
   domainName: app.node.tryGetContext('domainName') ?? defaultConfig.domainName,
+  hostedZoneId: app.node.tryGetContext('hostedZoneId') ?? defaultConfig.hostedZoneId,
   devSubdomain: app.node.tryGetContext('devSubdomain') ?? defaultConfig.devSubdomain,
+  dashboardSubdomain: app.node.tryGetContext('dashboardSubdomain') ?? defaultConfig.dashboardSubdomain,
+  cognitoDomainPrefix: app.node.tryGetContext('cognitoDomainPrefix') ?? defaultConfig.cognitoDomainPrefix,
+  opusModelId: app.node.tryGetContext('opusModelId') ?? defaultConfig.opusModelId,
+  sonnetModelId: app.node.tryGetContext('sonnetModelId') ?? defaultConfig.sonnetModelId,
+  ecsHostInstanceType: app.node.tryGetContext('ecsHostInstanceType') ?? defaultConfig.ecsHostInstanceType,
+  ecsClusterName: app.node.tryGetContext('ecsClusterName') ?? defaultConfig.ecsClusterName,
+  dashboardInstanceType: app.node.tryGetContext('dashboardInstanceType') ?? defaultConfig.dashboardInstanceType,
+  nodeVersion: app.node.tryGetContext('nodeVersion') ?? defaultConfig.nodeVersion,
+  dailyBudgetUsd: Number(app.node.tryGetContext('dailyBudgetUsd')) || defaultConfig.dailyBudgetUsd,
+  storageType: (app.node.tryGetContext('storageType') as 'efs' | 'ebs') ?? defaultConfig.storageType,
+  cloudfrontPrefixListId: app.node.tryGetContext('cloudfrontPrefixListId') ?? defaultConfig.cloudfrontPrefixListId,
 };
+
+if (!['efs', 'ebs'].includes(config.storageType)) {
+  throw new Error(`Invalid storageType: "${config.storageType}". Must be 'efs' or 'ebs'.`);
+}
 
 const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
@@ -58,8 +74,9 @@ const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
   devEnvCertificateArn: app.node.tryGetContext('devEnvCertArn'),
-  hostedZone: networkStack.hostedZone,
+  // hostedZone imported directly from config to avoid cross-stack export dependency
   cloudfrontSecret: securityStack.cloudfrontSecret,
+  taskPermissionBoundary: securityStack.taskPermissionBoundary,
   description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
 });
 ecsDevenvStack.addDependency(securityStack);
@@ -71,10 +88,16 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   encryptionKey: securityStack.encryptionKey,
   dashboardEc2Role: securityStack.dashboardEc2Role,
   dashboardCertificateArn: app.node.tryGetContext('dashboardCertArn'),
-  hostedZone: networkStack.hostedZone,
+  cloudfrontCertificateArn: app.node.tryGetContext('cloudfrontCertArn'),
+  // hostedZone imported directly from config to avoid cross-stack export dependency
   cloudfrontSecret: securityStack.cloudfrontSecret,
   userPool: securityStack.userPool,
   userPoolClient: securityStack.userPoolClient,
+  sgOpen: ecsDevenvStack.sgOpen,
+  sgRestricted: ecsDevenvStack.sgRestricted,
+  sgLocked: ecsDevenvStack.sgLocked,
+  devenvAlbListenerArn: ecsDevenvStack.devenvAlbListenerArn,
+  efsFileSystemId: ecsDevenvStack.efsFileSystemId,
   description: 'CC-on-Bedrock: Next.js Dashboard, ALB, CloudFront',
 });
 dashboardStack.addDependency(ecsDevenvStack);

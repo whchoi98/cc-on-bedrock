@@ -37,7 +37,6 @@ export default function BudgetManagement() {
   const [newLimit, setNewLimit] = useState("");
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await fetch("/api/admin/budgets");
       const json = await res.json();
@@ -124,7 +123,7 @@ export default function BudgetManagement() {
     return "bg-green-500";
   };
 
-  if (loading) {
+  if (loading && departments.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-sm text-gray-500">Loading budget data...</div>

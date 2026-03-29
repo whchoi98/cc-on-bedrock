@@ -101,6 +101,14 @@ const ko: Record<string, string> = {
   "dept.members": "부서원 목록",
   "dept.approve": "승인",
   "dept.reject": "거절",
+  "dept.allDepartments": "전체 부서",
+  "dept.overview": "부서 개요",
+  "dept.budgetUtil": "예산 사용률",
+  "dept.activeContainers": "활성 컨테이너",
+  "dept.pendingCount": "승인 대기",
+  "dept.totalMembers": "전체 인원",
+  "dept.totalCost": "전체 비용",
+  "dept.totalTokens": "전체 토큰",
 
   // Analytics
   "analytics.title": "Claude Code Usage",
@@ -378,6 +386,14 @@ const en: Record<string, string> = {
   "dept.members": "Department Members",
   "dept.approve": "Approve",
   "dept.reject": "Reject",
+  "dept.allDepartments": "All Departments",
+  "dept.overview": "Department Overview",
+  "dept.budgetUtil": "Budget Utilization",
+  "dept.activeContainers": "Active Containers",
+  "dept.pendingCount": "Pending Approvals",
+  "dept.totalMembers": "Total Members",
+  "dept.totalCost": "Total Cost",
+  "dept.totalTokens": "Total Tokens",
 
   // Analytics
   "analytics.title": "Claude Code Usage",

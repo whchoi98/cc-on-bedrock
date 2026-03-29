@@ -20,9 +20,9 @@ export default function UserManagement() {
   const [containerOs, setContainerOs] = useState<CreateUserInput["containerOs"]>("ubuntu");
   const [resourceTier, setResourceTier] = useState<CreateUserInput["resourceTier"]>("standard");
   const [securityPolicy, setSecurityPolicy] = useState<CreateUserInput["securityPolicy"]>("restricted");
+  const [storageType, setStorageType] = useState<CreateUserInput["storageType"]>("ebs");
 
   const fetchUsers = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await fetch("/api/users");
       const json = (await res.json()) as ApiResponse<CognitoUser[]>;
@@ -56,6 +56,7 @@ export default function UserManagement() {
           containerOs,
           resourceTier,
           securityPolicy,
+          storageType,
         } satisfies CreateUserInput),
       });
       const json = (await res.json()) as ApiResponse<CognitoUser>;
@@ -69,6 +70,7 @@ export default function UserManagement() {
       setContainerOs("ubuntu");
       setResourceTier("standard");
       setSecurityPolicy("restricted");
+      setStorageType("ebs");
       setShowCreateForm(false);
       void fetchUsers();
     } catch (err) {
@@ -240,6 +242,19 @@ export default function UserManagement() {
                   <option value="locked">Locked (High Security)</option>
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-400 mb-1">
+                  Storage Type
+                </label>
+                <select
+                  value={storageType}
+                  onChange={(e) => setStorageType(e.target.value as CreateUserInput["storageType"])}
+                  className="w-full px-3 py-2 text-sm bg-[#0d1117] border border-gray-700 text-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="ebs">EBS (Enterprise)</option>
+                  <option value="efs">EFS (Simple)</option>
+                </select>
+              </div>
             </div>
             <div className="flex justify-end">
               <button
@@ -255,7 +270,7 @@ export default function UserManagement() {
       )}
 
       {/* Users table */}
-      {loading ? (
+      {loading && users.length === 0 ? (
         <div className="flex items-center justify-center h-64">
           <div className="text-sm text-gray-500">Loading users...</div>
         </div>

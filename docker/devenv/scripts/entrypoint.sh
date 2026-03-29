@@ -140,10 +140,16 @@ fi
 if [ -n "${S3_SYNC_BUCKET:-}" ]; then
   echo "Restoring workspace from S3..."
   /opt/devenv/scripts/s3-sync.sh restore || echo "S3 restore failed, continuing with empty workspace"
-  # Setup periodic sync cron (every 5 minutes)
-  echo "*/5 * * * * /opt/devenv/scripts/s3-sync.sh sync >> /var/log/s3-sync.log 2>&1" | crontab -u coder -
-  crond || cron || echo "Cron daemon not available"  # Start cron daemon (works on both AL2023 and Ubuntu)
-  echo "S3 sync configured: restore complete, cron scheduled"
+  # Setup periodic sync — use cron if available, else background loop
+  if command -v crontab &>/dev/null; then
+    echo "*/5 * * * * /opt/devenv/scripts/s3-sync.sh sync >> /var/log/s3-sync.log 2>&1" | crontab -u coder -
+    crond 2>/dev/null || cron 2>/dev/null || true
+    echo "S3 sync configured: restore complete, cron scheduled"
+  else
+    # Fallback: background sync loop every 5 minutes
+    (while true; do sleep 300; /opt/devenv/scripts/s3-sync.sh sync >> /var/log/s3-sync.log 2>&1; done) &
+    echo "S3 sync configured: restore complete, background loop scheduled (no cron)"
+  fi
 fi
 
 # --- Start code-server ---
@@ -165,9 +171,19 @@ chmod 644 /etc/profile.d/claude-env.sh
 if ! grep -q "profile.d/claude-env" "$USER_BASHRC" 2>/dev/null; then
   echo '[ -f /etc/profile.d/claude-env.sh ] && source /etc/profile.d/claude-env.sh' >> "$USER_BASHRC"
 fi
+# Resolve code-server password: prefer Secrets Manager ARN, fallback to env var
+if [ -n "${CODESERVER_SECRET_ARN:-}" ]; then
+  RESOLVED_PASSWORD=$(aws secretsmanager get-secret-value \
+    --secret-id "$CODESERVER_SECRET_ARN" \
+    --region "${AWS_DEFAULT_REGION:-ap-northeast-2}" \
+    --query SecretString --output text 2>/dev/null) || RESOLVED_PASSWORD="${CODESERVER_PASSWORD:-}"
+else
+  RESOLVED_PASSWORD="${CODESERVER_PASSWORD:-}"
+fi
+
 echo "Starting code-server for user: $SUBDOMAIN (Bedrock native mode)"
 exec sudo -u coder \
-  PASSWORD="${CODESERVER_PASSWORD:-}" \
+  PASSWORD="$RESOLVED_PASSWORD" \
   code-server \
   --bind-addr 0.0.0.0:8080 \
   --auth "${CODESERVER_AUTH:-password}" \

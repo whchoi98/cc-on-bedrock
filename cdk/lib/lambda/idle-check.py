@@ -204,8 +204,9 @@ def get_cpu_metrics(user_id: str, start_time: datetime, end_time: datetime) -> f
         if datapoints:
             return sum(dp["Average"] for dp in datapoints) / len(datapoints)
 
-        # No metrics found - return high value to avoid false positives
-        logger.warning(f"No CPU metrics found for user {user_id}")
+        # No metrics found - return high value to prevent false idle detection
+        # Standalone ECS tasks may not emit ServiceName-based metrics
+        logger.warning(f"No CPU metrics found for user {user_id}, returning 100% (fail safe)")
         return 100.0
 
     except ClientError as e:

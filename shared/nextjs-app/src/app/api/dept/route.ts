@@ -11,31 +11,13 @@ import {
 import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
 import { listCognitoUsers } from "@/lib/aws-clients";
 import { getUsageRecords } from "@/lib/usage-client";
+import type { DeptBudget, PendingRequest } from "@/lib/types";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_BUDGETS_TABLE = process.env.DEPT_BUDGETS_TABLE ?? "cc-department-budgets";
 const APPROVAL_REQUESTS_TABLE = process.env.APPROVAL_REQUESTS_TABLE ?? "cc-on-bedrock-approval-requests";
 
 const dynamodb = new DynamoDBClient({ region });
-
-interface DeptBudget {
-  department: string;
-  monthlyBudget: number;
-  currentSpend: number;
-  monthlyTokenLimit: number;
-  currentTokens: number;
-}
-
-interface PendingRequest {
-  requestId: string;
-  email: string;
-  subdomain: string;
-  containerOs: string;
-  resourceTier: string;
-  requestedAt: string;
-  status: "pending" | "approved" | "rejected";
-  department: string;
-}
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -54,47 +36,61 @@ export async function GET(req: NextRequest) {
 
   try {
     // Get department from user email domain or custom attribute
-    // For simplicity, we'll use "default" department or extract from email
+    // Admin can filter by department via query parameter
     const userEmail = session.user.email;
-    const department = isAdmin ? "all" : (userEmail.split("@")[1]?.split(".")[0] ?? "default");
+    const deptFilter = req.nextUrl.searchParams.get("department");
+    const department = isAdmin
+      ? (deptFilter ?? "all")
+      : (userEmail.split("@")[1]?.split(".")[0] ?? "default");
 
     // Fetch department members from Cognito
     const allUsers = await listCognitoUsers();
-    const members = isAdmin
+    const members = department === "all"
       ? allUsers
       : allUsers.filter((u) => u.department === department || u.department === "default");
 
     // Fetch department budget from DynamoDB
     let budget: DeptBudget | null = null;
     try {
-      const budgetResult = await dynamodb.send(
-        new QueryCommand({
-          TableName: DEPT_BUDGETS_TABLE,
-          KeyConditionExpression: "PK = :pk",
-          ExpressionAttributeValues: {
-            ":pk": { S: `DEPT#${department}` },
-          },
-        })
-      );
-
-      if (budgetResult.Items && budgetResult.Items.length > 0) {
-        const item = unmarshall(budgetResult.Items[0]);
+      if (department === "all") {
+        // For "all" view, aggregate budget across all departments
         budget = {
-          department: item.department ?? department,
-          monthlyBudget: item.monthlyBudget ?? 1000,
-          currentSpend: item.currentSpend ?? 0,
-          monthlyTokenLimit: item.monthlyTokenLimit ?? 10000000,
-          currentTokens: item.currentTokens ?? 0,
-        };
-      } else {
-        // Return default budget if not found
-        budget = {
-          department,
-          monthlyBudget: 1000,
+          department: "all",
+          monthlyBudget: 0,
           currentSpend: 0,
-          monthlyTokenLimit: 10000000,
+          monthlyTokenLimit: 0,
           currentTokens: 0,
         };
+      } else {
+        const budgetResult = await dynamodb.send(
+          new QueryCommand({
+            TableName: DEPT_BUDGETS_TABLE,
+            KeyConditionExpression: "PK = :pk",
+            ExpressionAttributeValues: {
+              ":pk": { S: `DEPT#${department}` },
+            },
+          })
+        );
+
+        if (budgetResult.Items && budgetResult.Items.length > 0) {
+          const item = unmarshall(budgetResult.Items[0]);
+          budget = {
+            department: item.department ?? department,
+            monthlyBudget: item.monthlyBudget ?? 1000,
+            currentSpend: item.currentSpend ?? 0,
+            monthlyTokenLimit: item.monthlyTokenLimit ?? 10000000,
+            currentTokens: item.currentTokens ?? 0,
+          };
+        } else {
+          // Return default budget if not found
+          budget = {
+            department,
+            monthlyBudget: 1000,
+            currentSpend: 0,
+            monthlyTokenLimit: 10000000,
+            currentTokens: 0,
+          };
+        }
       }
     } catch (err) {
       console.warn("[dept] Budget fetch error:", err);
@@ -114,13 +110,13 @@ export async function GET(req: NextRequest) {
       const requestsResult = await dynamodb.send(
         new ScanCommand({
           TableName: APPROVAL_REQUESTS_TABLE,
-          FilterExpression: "#status = :pending" + (isAdmin ? "" : " AND department = :dept"),
+          FilterExpression: "#status = :pending" + (department === "all" ? "" : " AND department = :dept"),
           ExpressionAttributeNames: {
             "#status": "status",
           },
           ExpressionAttributeValues: {
             ":pending": { S: "pending" },
-            ...(isAdmin ? {} : { ":dept": { S: department } }),
+            ...(department === "all" ? {} : { ":dept": { S: department } }),
           },
         })
       );
@@ -153,7 +149,7 @@ export async function GET(req: NextRequest) {
       const usageRecords = await getUsageRecords({
         startDate: firstDayOfMonth,
         endDate: today,
-        department: isAdmin ? undefined : department,
+        department: department === "all" ? undefined : department,
       });
 
       // Aggregate by date

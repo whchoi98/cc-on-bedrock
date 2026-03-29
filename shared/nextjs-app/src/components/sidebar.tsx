@@ -166,9 +166,12 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
         {filteredItems.map((item) => {
+          const hasChildNav = navItems.some(other => other.href !== item.href && other.href.startsWith(item.href + "/"));
           const isActive = item.href === "/"
             ? pathname === "/"
-            : pathname === item.href || pathname.startsWith(item.href + "/");
+            : hasChildNav
+              ? pathname === item.href
+              : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}

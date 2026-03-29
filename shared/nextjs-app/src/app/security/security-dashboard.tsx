@@ -160,7 +160,7 @@ export default function SecurityDashboard() {
 
   const isKo = locale === "ko";
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-sm text-gray-500">Loading security data...</div>

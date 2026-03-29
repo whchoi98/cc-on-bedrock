@@ -95,7 +95,7 @@ def check_idle(event: dict) -> dict:
         task_id = task_arn.split("/")[-1]
 
         # Check CPU utilization from CloudWatch
-        is_idle, idle_minutes = check_task_idle_status(task_id, user_id)
+        is_idle, idle_minutes = check_task_idle_status(task_id, user_id, started_at=task_info.get("started_at"))
 
         if is_idle:
             logger.info(f"Task {task_id} (user: {user_id}) is idle for {idle_minutes} minutes")
@@ -383,13 +383,20 @@ def get_task_info(task_arn: str) -> dict | None:
         return None
 
 
-def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = None) -> tuple:
+def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = None, started_at: datetime = None) -> tuple:
     """
     Check if task is idle based on CloudWatch CPU metrics.
     Returns (is_idle: bool, idle_minutes: int).
     """
     if period_minutes is None:
         period_minutes = IDLE_THRESHOLD_MINUTES + 15  # Check full threshold + grace period
+
+    # Grace period: never mark a task idle within 10 minutes of start
+    if started_at:
+        uptime = (datetime.utcnow() - started_at.replace(tzinfo=None)).total_seconds() / 60
+        if uptime < 10:
+            logger.info(f"Task {task_id} started {uptime:.0f}m ago, within grace period")
+            return False, 0
 
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(minutes=period_minutes)
@@ -410,9 +417,10 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
 
         datapoints = response.get("Datapoints", [])
         if not datapoints:
-            # No metrics = assume idle (container might be newly started)
-            logger.info(f"No CPU metrics for task {task_id}, assuming idle")
-            return True, period_minutes
+            # No metrics = fail safe, do NOT assume idle
+            # Standalone tasks may not emit ServiceName-based metrics
+            logger.info(f"No CPU metrics for task {task_id} (user: {user_id}), assuming NOT idle (fail safe)")
+            return False, 0
 
         # Sort by timestamp
         datapoints.sort(key=lambda x: x["Timestamp"])

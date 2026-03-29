@@ -77,6 +77,7 @@ export default function ContainerManagement({
         containerOs: user.containerOs,
         resourceTier: user.resourceTier,
         securityPolicy: user.securityPolicy,
+        storageType: user.storageType ?? "efs",
       };
 
       const res = await fetch("/api/containers", {
@@ -313,7 +314,7 @@ export default function ContainerManagement({
                 <option value="">Choose a user...</option>
                 {availableUsers.map((user) => (
                   <option key={user.username} value={user.username}>
-                    {user.email} ({user.subdomain}) - {user.containerOs === "al2023" ? "AL2023" : "Ubuntu"} / {user.resourceTier} / {user.securityPolicy}
+                    {user.email} ({user.subdomain}) - {user.containerOs === "al2023" ? "AL2023" : "Ubuntu"} / {user.resourceTier} / {user.securityPolicy} / {(user.storageType ?? "efs").toUpperCase()}
                   </option>
                 ))}
               </select>
@@ -324,7 +325,7 @@ export default function ContainerManagement({
               return (
                 <div className="bg-[#0d1117] rounded-lg p-4 text-sm">
                   <h4 className="font-medium text-gray-300 mb-2">Container Config</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-gray-400">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-gray-400">
                     <div>
                       <span className="text-gray-500">OS:</span>{" "}
                       {user.containerOs === "al2023" ? "Amazon Linux 2023" : "Ubuntu 24.04"}
@@ -336,6 +337,12 @@ export default function ContainerManagement({
                     <div>
                       <span className="text-gray-500">Security:</span>{" "}
                       {user.securityPolicy}
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Storage:</span>{" "}
+                      <span className={user.storageType === "ebs" ? "text-blue-400" : "text-green-400"}>
+                        {(user.storageType ?? "efs").toUpperCase()}
+                      </span>
                     </div>
                     <div>
                       <span className="text-gray-500">Subdomain:</span>{" "}

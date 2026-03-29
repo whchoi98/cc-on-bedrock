@@ -15,6 +15,8 @@ export default async function DeptPage() {
     redirect("/user");
   }
 
+  const isAdmin = groups.includes("admin");
+
   return (
     <div>
       <div className="mb-8">
@@ -23,7 +25,7 @@ export default async function DeptPage() {
           Manage your department members, budget, and approval requests
         </p>
       </div>
-      <DeptDashboard user={session.user} />
+      <DeptDashboard user={session.user} isAdmin={isAdmin} />
     </div>
   );
 }

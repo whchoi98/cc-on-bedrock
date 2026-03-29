@@ -25,6 +25,7 @@ export interface CognitoUser {
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
+  storageType?: "ebs" | "efs";
   litellmApiKey?: string;
   containerId?: string;
   groups: string[];
@@ -37,6 +38,7 @@ export interface CreateUserInput {
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
+  storageType: "ebs" | "efs";
 }
 
 export interface UpdateUserInput {
@@ -44,6 +46,7 @@ export interface UpdateUserInput {
   containerOs?: "ubuntu" | "al2023";
   resourceTier?: "light" | "standard" | "power";
   securityPolicy?: "open" | "restricted" | "locked";
+  storageType?: "ebs" | "efs";
 }
 
 // ─── Usage Analytics Types ───
@@ -107,6 +110,7 @@ export interface ContainerInfo {
   stoppedAt?: string;
   healthStatus?: string;
   privateIp?: string;
+  storageType?: "ebs" | "efs";
 }
 
 export interface StartContainerInput {
@@ -116,6 +120,7 @@ export interface StartContainerInput {
   containerOs: "ubuntu" | "al2023";
   resourceTier: "light" | "standard" | "power";
   securityPolicy: "open" | "restricted" | "locked";
+  storageType?: "ebs" | "efs";
 }
 
 // ─── Usage Tracking Types (CloudTrail → DynamoDB) ───
@@ -138,6 +143,54 @@ export interface DepartmentUsage {
   totalTokens: number;
   totalCost: number;
   requests: number;
+}
+
+// ─── Department Dashboard Types ───
+
+export interface DeptMember {
+  username: string;
+  email: string;
+  subdomain: string;
+  containerOs: string;
+  resourceTier: string;
+  status: string;
+  containerStatus?: string;
+}
+
+export interface DeptBudget {
+  department: string;
+  monthlyBudget: number;
+  currentSpend: number;
+  monthlyTokenLimit: number;
+  currentTokens: number;
+}
+
+export interface PendingRequest {
+  requestId: string;
+  email: string;
+  subdomain: string;
+  containerOs: string;
+  resourceTier: string;
+  requestedAt: string;
+  status: "pending" | "approved" | "rejected";
+  department: string;
+}
+
+export interface MonthlyUsage {
+  date: string;
+  cost: number;
+  tokens: number;
+}
+
+export interface DepartmentListItem {
+  department: string;
+  memberCount: number;
+  totalCost: number;
+  totalTokens: number;
+  requests: number;
+  budgetUtilization: number;
+  monthlyBudget: number;
+  pendingCount: number;
 }
 
 export interface UserUsage {

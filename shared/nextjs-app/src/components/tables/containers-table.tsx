@@ -185,6 +185,13 @@ export default function ContainersTable({
                         }`}>
                           {container.resourceTier}
                         </span>
+                        {container.storageType && (
+                          <span className={`px-1.5 py-0.5 text-[10px] rounded ${
+                            container.storageType === "ebs" ? "bg-blue-900/40 text-blue-400" : "bg-green-900/40 text-green-400"
+                          }`}>
+                            {container.storageType.toUpperCase()}
+                          </span>
+                        )}
                       </div>
                       <span className="text-[9px] text-gray-600">
                         {Math.round(parseInt(container.cpu || "0") / 1024)} vCPU / {Math.round(parseInt(container.memory || "0") / 1024)} GiB

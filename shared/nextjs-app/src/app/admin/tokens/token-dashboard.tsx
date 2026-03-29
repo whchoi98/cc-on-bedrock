@@ -39,7 +39,6 @@ export default function TokenDashboard() {
   const [period, setPeriod] = useState<"1d" | "7d" | "30d">("7d");
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await fetch(`/api/admin/tokens?period=${period}`);
       const json = await res.json();
@@ -66,7 +65,7 @@ export default function TokenDashboard() {
 
   const formatCost = (n: number) => `$${n.toFixed(2)}`;
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-sm text-gray-500">Loading token data...</div>
