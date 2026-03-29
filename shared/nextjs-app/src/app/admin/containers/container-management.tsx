@@ -17,7 +17,7 @@ interface ContainerManagementProps {
 }
 
 export default function ContainerManagement({
-  domainName = "example.com",
+  domainName = "atomai.click",
   devSubdomain = "dev",
 }: ContainerManagementProps) {
   const { t } = useI18n();
@@ -31,7 +31,6 @@ export default function ContainerManagement({
   const [efsInfo, setEfsInfo] = useState<{ sizeBytes: number; sizeStandard: number; sizeIA: number; state: string; numberOfMountTargets: number; perUser?: Record<string, number> } | null>(null);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const [containersRes, usersRes, efsRes] = await Promise.all([
         fetch("/api/containers"),
@@ -129,7 +128,7 @@ export default function ContainerManagement({
     (u) => u.enabled && !activeSubdomains.has(u.subdomain)
   );
 
-  if (loading) {
+  if (loading && containers.length === 0 && !efsInfo) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-sm text-gray-500">Loading containers...</div>

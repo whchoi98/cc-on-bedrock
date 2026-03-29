@@ -39,7 +39,7 @@ export default function UserPortal({ user }: UserPortalProps) {
     allowedTiers: ["light", "standard", "power"],
   });
 
-  const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "example.com";
+  const domainName = process.env.NEXT_PUBLIC_DOMAIN_NAME ?? "atomai.click";
   const devSubdomain = process.env.NEXT_PUBLIC_DEV_SUBDOMAIN ?? "dev";
 
   const fetchData = useCallback(async () => {
@@ -150,7 +150,7 @@ export default function UserPortal({ user }: UserPortalProps) {
     ? Math.min(100, Math.round((usage.totalTokens / usage.dailyLimit) * 100))
     : 0;
 
-  if (loading) {
+  if (loading && !container && !usage) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-gray-400">{t("analytics.loading")}</div>

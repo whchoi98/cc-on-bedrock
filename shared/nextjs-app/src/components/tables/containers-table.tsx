@@ -37,7 +37,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 export default function ContainersTable({
   containers,
   onStop,
-  domainName = "example.com",
+  domainName = "atomai.click",
   devSubdomain = "dev",
 }: ContainersTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("user");

@@ -51,13 +51,12 @@ import {
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
 const ecsCluster = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-cluster";
-const domainName = process.env.DOMAIN_NAME ?? "example.com";
+const domainName = process.env.DOMAIN_NAME ?? "atomai.click";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
 const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
 const lambdaClient = new LambdaClient({ region });
 const s3SyncBucket = process.env.S3_SYNC_BUCKET ?? "";
-const ebsLifecycleLambda = process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle";
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
@@ -95,6 +94,7 @@ function toCognitoUser(user: {
     containerOs: (getAttr(attrs, "custom:container_os") as CognitoUser["containerOs"]) ?? "ubuntu",
     resourceTier: (getAttr(attrs, "custom:resource_tier") as CognitoUser["resourceTier"]) ?? "standard",
     securityPolicy: (getAttr(attrs, "custom:security_policy") as CognitoUser["securityPolicy"]) ?? "restricted",
+    storageType: (getAttr(attrs, "custom:storage_type") as CognitoUser["storageType"]) ?? "ebs",
     litellmApiKey: getAttr(attrs, "custom:litellm_api_key"),
     containerId: getAttr(attrs, "custom:container_id"),
     groups: [],
@@ -151,6 +151,7 @@ export async function createCognitoUser(
         { Name: "custom:container_os", Value: input.containerOs },
         { Name: "custom:resource_tier", Value: input.resourceTier },
         { Name: "custom:security_policy", Value: input.securityPolicy },
+        { Name: "custom:storage_type", Value: input.storageType },
       ],
       DesiredDeliveryMediums: ["EMAIL"],
     })
@@ -186,6 +187,11 @@ export async function updateCognitoUser(
     attrs.push({
       Name: "custom:security_policy",
       Value: input.securityPolicy,
+    });
+  if (input.storageType)
+    attrs.push({
+      Name: "custom:storage_type",
+      Value: input.storageType,
     });
 
   if (attrs.length > 0) {

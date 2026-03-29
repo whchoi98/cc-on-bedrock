@@ -79,7 +79,7 @@ function UtilizationBar({ label, used, total, unit, color }: {
 }
 
 export default function MonitoringDashboard({
-  domainName = "example.com",
+  domainName = "atomai.click",
   devSubdomain = "dev",
 }: MonitoringDashboardProps) {
   const { t, locale } = useI18n();
