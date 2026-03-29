@@ -20,7 +20,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
-import { CcOnBedrockConfig } from '../config/default';
+import { CcOnBedrockConfig, isEbsMode } from '../config/default';
 
 export interface EcsDevenvStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
@@ -29,12 +29,18 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   devEnvCertificateArn?: string;
   hostedZone?: route53.IHostedZone;
   cloudfrontSecret: secretsmanager.Secret;
+  taskPermissionBoundary?: iam.IManagedPolicy;
 }
 
 export class EcsDevenvStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
   public readonly ecrRepo: ecr.IRepository;
   public readonly alb: elbv2.ApplicationLoadBalancer;
+  public readonly sgOpen: ec2.SecurityGroup;
+  public readonly sgRestricted: ec2.SecurityGroup;
+  public readonly sgLocked: ec2.SecurityGroup;
+  public readonly devenvAlbListenerArn: string;
+  public readonly efsFileSystemId: string;
 
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
@@ -54,6 +60,7 @@ export class EcsDevenvStack extends cdk.Stack {
     const ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
       roleName: 'cc-on-bedrock-ecs-task',
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      ...(props.taskPermissionBoundary ? { permissionsBoundary: props.taskPermissionBoundary } : {}),
     });
     // Bedrock: All Claude models (Opus, Sonnet, Haiku)
     // Both foundation-model and inference-profile ARNs required
@@ -112,6 +119,7 @@ export class EcsDevenvStack extends cdk.Stack {
       throughputMode: efs.ThroughputMode.ELASTIC,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+    this.efsFileSystemId = fileSystem.fileSystemId;
 
     // S3 Bucket for user workspace data (import existing - was created with RETAIN policy)
     const userDataBucket = s3.Bucket.fromBucketAttributes(this, 'UserDataBucket', {
@@ -119,46 +127,67 @@ export class EcsDevenvStack extends cdk.Stack {
       encryptionKey,
     });
 
-    // Reference user-volumes table (created in UsageTracking stack)
-    const userVolumesTable = dynamodb.Table.fromTableAttributes(this, 'UserVolumesTable', {
-      tableName: 'cc-user-volumes',
-      encryptionKey,
-    });
+    // EBS lifecycle (EBS mode only)
+    if (isEbsMode(config)) {
+      const userVolumesTable = dynamodb.Table.fromTableAttributes(this, 'UserVolumesTable', {
+        tableName: 'cc-user-volumes',
+        encryptionKey,
+      });
 
-    // Lambda Function for EBS lifecycle
-    const ebsLifecycleLambda = new lambda.Function(this, 'EbsLifecycleLambda', {
-      functionName: 'cc-on-bedrock-ebs-lifecycle',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'ebs-lifecycle.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
-      timeout: cdk.Duration.minutes(5),
-      environment: {
-        VOLUMES_TABLE: 'cc-user-volumes',
-        REGION: cdk.Aws.REGION,
-      },
-    });
-    userVolumesTable.grantReadWriteData(ebsLifecycleLambda);
-    ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ec2:CreateVolume', 'ec2:DeleteVolume', 'ec2:AttachVolume', 'ec2:DetachVolume',
-                'ec2:CreateSnapshot', 'ec2:DeleteSnapshot', 'ec2:DescribeVolumes', 'ec2:DescribeSnapshots',
-                'ec2:CreateTags'],
-      resources: ['*'],
-    }));
+      const ebsLifecycleLambda = new lambda.Function(this, 'EbsLifecycleLambda', {
+        functionName: 'cc-on-bedrock-ebs-lifecycle',
+        runtime: lambda.Runtime.PYTHON_3_12,
+        handler: 'ebs-lifecycle.handler',
+        code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+        timeout: cdk.Duration.minutes(5),
+        environment: {
+          VOLUMES_TABLE: 'cc-user-volumes',
+          REGION: cdk.Aws.REGION,
+        },
+      });
+      userVolumesTable.grantReadWriteData(ebsLifecycleLambda);
+      // Non-destructive EBS actions (wildcard resources)
+      ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
+        actions: [
+          'ec2:CreateVolume', 'ec2:AttachVolume', 'ec2:DetachVolume',
+          'ec2:CreateSnapshot', 'ec2:DescribeVolumes', 'ec2:DescribeSnapshots',
+          'ec2:CreateTags',
+        ],
+        resources: ['*'],
+      }));
+      // Destructive EBS actions restricted to cc-on-bedrock tagged resources only
+      ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['ec2:DeleteVolume', 'ec2:DeleteSnapshot'],
+        resources: ['*'],
+        conditions: {
+          StringEquals: {
+            'aws:ResourceTag/managed_by': 'cc-on-bedrock',
+          },
+        },
+      }));
+
+      new cdk.CfnOutput(this, 'EbsLifecycleLambdaArn', { value: ebsLifecycleLambda.functionArn });
+    }
 
     // DLP Security Groups
-    const sgOpen = new ec2.SecurityGroup(this, 'DevenvSgOpen', {
+    this.sgOpen = new ec2.SecurityGroup(this, 'DevenvSgOpen', {
       vpc, description: 'DLP: Open - all outbound', allowAllOutbound: true,
     });
-    const sgRestricted = new ec2.SecurityGroup(this, 'DevenvSgRestricted', {
+    this.sgRestricted = new ec2.SecurityGroup(this, 'DevenvSgRestricted', {
       vpc, description: 'DLP: Restricted - whitelist outbound', allowAllOutbound: false,
     });
-    sgRestricted.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal');
-    sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS for whitelisted domains');
+    this.sgRestricted.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal');
+    this.sgRestricted.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS for whitelisted domains');
 
-    const sgLocked = new ec2.SecurityGroup(this, 'DevenvSgLocked', {
+    this.sgLocked = new ec2.SecurityGroup(this, 'DevenvSgLocked', {
       vpc, description: 'DLP: Locked - VPC only', allowAllOutbound: false,
     });
-    sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal only');
+    this.sgLocked.addEgressRule(ec2.Peer.ipv4(config.vpcCidr), ec2.Port.allTraffic(), 'Allow VPC internal only');
+
+    // Local aliases for convenience
+    const sgOpen = this.sgOpen;
+    const sgRestricted = this.sgRestricted;
+    const sgLocked = this.sgLocked;
 
     // Allow EFS access from all DLP SGs
     [sgOpen, sgRestricted, sgLocked].forEach(sg => {
@@ -310,8 +339,9 @@ export class EcsDevenvStack extends cdk.Stack {
     });
 
     // Listener - HTTPS with X-Custom-Secret validation
+    let devenvListener: elbv2.ApplicationListener;
     if (devEnvCertificateArn) {
-      const httpsListener = this.alb.addListener('HttpsListener', {
+      devenvListener = this.alb.addListener('HttpsListener', {
         port: 443,
         protocol: elbv2.ApplicationProtocol.HTTPS,
         certificates: [elbv2.ListenerCertificate.fromArn(devEnvCertificateArn)],
@@ -322,7 +352,7 @@ export class EcsDevenvStack extends cdk.Stack {
       });
     } else {
       // Fallback HTTP listener (dev/test only - production must use HTTPS)
-      this.alb.addListener('HttpListener', {
+      devenvListener = this.alb.addListener('HttpListener', {
         port: 80,
         protocol: elbv2.ApplicationProtocol.HTTP,
         defaultAction: elbv2.ListenerAction.fixedResponse(403, {
@@ -331,6 +361,7 @@ export class EcsDevenvStack extends cdk.Stack {
         }),
       });
     }
+    this.devenvAlbListenerArn = devenvListener.listenerArn;
 
     // CloudFront Distribution
     const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
@@ -411,8 +442,6 @@ export class EcsDevenvStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'SgRestricted', { value: sgRestricted.securityGroupId, exportName: 'cc-sg-devenv-restricted' });
     new cdk.CfnOutput(this, 'SgLocked', { value: sgLocked.securityGroupId, exportName: 'cc-sg-devenv-locked' });
     new cdk.CfnOutput(this, 'UserDataBucketName', { value: userDataBucket.bucketName });
-    // UserVolumesTable output is in UsageTracking stack
-    new cdk.CfnOutput(this, 'EbsLifecycleLambdaArn', { value: ebsLifecycleLambda.functionArn });
 
     // NLB + Nginx routing outputs
     new cdk.CfnOutput(this, 'RoutingTableName', { value: routingTable.tableName, exportName: 'cc-routing-table-name' });
