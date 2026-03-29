@@ -90,7 +90,8 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
         if (listRes.ok) {
           const listData = await listRes.json();
           if (listData.success) {
-            setDepartmentList(listData.data ?? []);
+            const depts = Array.isArray(listData.data) ? listData.data : listData.data?.departments ?? [];
+            setDepartmentList(depts);
           }
         }
       }
