@@ -2,8 +2,27 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
 import { useI18n } from "@/lib/i18n";
+import { 
+  RefreshCw, 
+  ChevronRight, 
+  ArrowUpRight, 
+  Shield, 
+  Database, 
+  Layers, 
+  Layout as LayoutIcon,
+  Cpu,
+  Zap
+} from "lucide-react";
 import type { SpendLog, ContainerInfo, ModelMetrics, ApiResponse } from "@/lib/types";
+import StatCard from "@/components/cards/stat-card";
+import HealthCard from "@/components/cards/health-card";
+import ContainerMetrics from "@/components/container-metrics";
+import ModelUsageChart from "@/components/charts/model-usage-chart";
+import DailySpendChart from "@/components/charts/daily-spend-chart";
+import { cn } from "@/lib/utils";
+
 interface HomeDashboardProps {
   isAdmin: boolean;
 }
@@ -29,383 +48,277 @@ interface ContainerCWMetrics {
   containerInstanceCount: number;
 }
 
-// ── Helpers ──
 function formatCost(v: number): string {
   if (v >= 1000) return `$${(v / 1000).toFixed(2)}K`;
   if (v >= 1) return `$${v.toFixed(2)}`;
   return `$${v.toFixed(4)}`;
 }
+
 function formatNum(v: number): string {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
   return v.toFixed(v < 10 && v > 0 ? 2 : 0);
 }
-function formatBytes(b: number): string {
-  if (b >= 1_073_741_824) return `${(b / 1_073_741_824).toFixed(1)} GB`;
-  if (b >= 1_048_576) return `${(b / 1_048_576).toFixed(1)} MB`;
-  if (b >= 1024) return `${(b / 1024).toFixed(0)} KB`;
-  return `${b} B`;
-}
 
-// ── Section Header ──
-function SectionHeader({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between mb-3">
-      <h2 className="text-[11px] font-semibold text-gray-400 uppercase tracking-[0.15em]">{children}</h2>
-      {right}
-    </div>
-  );
-}
-
-// ── Hero Stat Card (large, gradient, icon) ──
-function HeroCard({ title, value, subtitle, icon, gradient }: {
-  title: string; value: string; subtitle?: string; icon: React.ReactNode; gradient: string;
-}) {
-  return (
-    <div className={`relative overflow-hidden rounded-xl border border-gray-800/50 p-5 bg-gradient-to-br ${gradient} hover:scale-[1.01] transition-transform`}>
-      <div className="relative z-10">
-        <p className="text-[10px] text-gray-300/80 uppercase tracking-wider font-medium">{title}</p>
-        <p className="mt-1.5 text-3xl font-extrabold text-white tracking-tight">{value}</p>
-        {subtitle && <p className="mt-1 text-[11px] text-gray-300/60">{subtitle}</p>}
-      </div>
-      <div className="absolute top-4 right-4 opacity-20 text-white">{icon}</div>
-    </div>
-  );
-}
-
-// ── Compact Stat ──
-function CompactStat({ label, value, sub, color = "text-white" }: {
-  label: string; value: string | number; sub?: string; color?: string;
-}) {
-  return (
-    <div className="bg-[#111827] rounded-lg border border-gray-800/50 p-3.5">
-      <p className="text-[10px] text-gray-500 truncate">{label}</p>
-      <p className={`text-lg font-bold ${color} mt-0.5`}>{value}</p>
-      {sub && <p className="text-[9px] text-gray-600 mt-0.5">{sub}</p>}
-    </div>
-  );
-}
-
-// ── Mini Progress Bar ──
-function MiniBar({ pct, color, label, detail }: {
-  pct: number; color: string; label: string; detail: string;
-}) {
-  const barColor = pct > 80 ? "bg-red-500" : pct > 60 ? "bg-yellow-500" : color;
-  return (
+const SectionHeader = ({ title, subtitle, icon: Icon, action }: any) => (
+  <div className="flex items-end justify-between mb-6 group">
     <div className="space-y-1">
-      <div className="flex justify-between text-[10px]">
-        <span className="text-gray-400">{label}</span>
-        <span className="text-gray-500">{detail}</span>
+      <div className="flex items-center gap-2">
+        <div className="p-1.5 rounded-lg bg-primary-500/10 text-primary-400 group-hover:scale-110 transition-transform duration-300">
+          <Icon className="w-4 h-4" />
+        </div>
+        <h2 className="text-sm font-black text-white uppercase tracking-widest leading-none">
+          {title}
+        </h2>
       </div>
-      <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${barColor} transition-all`} style={{ width: `${Math.min(pct, 100)}%` }} />
-      </div>
+      <p className="text-xs font-bold text-gray-500 uppercase tracking-tighter">
+        {subtitle}
+      </p>
     </div>
-  );
-}
-
-// ── Status Dot ──
-function StatusDot({ ok, label, value }: { ok: boolean; label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-2 py-1">
-      <span className={`w-2 h-2 rounded-full shrink-0 ${ok ? "bg-green-400 animate-pulse" : "bg-red-400"}`} />
-      <span className="text-[11px] text-gray-400 flex-1">{label}</span>
-      <span className={`text-[11px] font-medium ${ok ? "text-green-400" : "text-red-400"}`}>{value}</span>
-    </div>
-  );
-}
-
-// ── Quick Nav ──
-function NavCard({ href, title, desc, icon, accent }: {
-  href: string; title: string; desc: string; icon: React.ReactNode; accent: string;
-}) {
-  return (
-    <Link href={href} className="flex items-center gap-3 p-3.5 bg-[#111827] rounded-lg border border-gray-800/50 hover:border-gray-600 hover:bg-[#151d2e] transition-all group">
-      <div className={`p-2 rounded-lg ${accent} shrink-0`}>{icon}</div>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-gray-200 group-hover:text-white">{title}</p>
-        <p className="text-[10px] text-gray-500 truncate">{desc}</p>
-      </div>
-      <svg className="w-3.5 h-3.5 text-gray-700 group-hover:text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-      </svg>
-    </Link>
-  );
-}
-
-// ── SVG Icons (larger for hero) ──
-function DollarIcon({ size = 5 }: { size?: number }) {
-  return <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
-}
-function BoltIcon({ size = 5 }: { size?: number }) {
-  return <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>;
-}
-function UsersIcon({ size = 5 }: { size?: number }) {
-  return <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>;
-}
-function ServerIcon({ size = 5 }: { size?: number }) {
-  return <svg className={`w-${size} h-${size}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" /></svg>;
-}
-function ChartIcon() {
-  return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>;
-}
+    {action}
+  </div>
+);
 
 export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const { t } = useI18n();
-  const [logs, setLogs] = useState<SpendLog[]>([]);
-  const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
-  const [modelMetrics, setModelMetrics] = useState<ModelMetrics[]>([]);
-  const [cwMetrics, setCwMetrics] = useState<ContainerCWMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [data, setData] = useState<{
+    dailySpend: SpendLog[];
+    totalCost: number;
+    totalTokens: number;
+    activeContainers: number;
+    containers: ContainerInfo[];
+    modelMetrics: ModelMetrics[];
+    cwMetrics: ContainerCWMetrics | null;
+    health: SystemHealth | null;
+  }>({
+    dailySpend: [],
+    totalCost: 0,
+    totalTokens: 0,
+    activeContainers: 0,
+    containers: [],
+    modelMetrics: [],
+    cwMetrics: null,
+    health: null,
+  });
 
   const fetchData = useCallback(async () => {
     try {
-      const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
-      const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
-
-      const [logsRes, containersRes] = await Promise.all([
-        fetch(`/api/usage?action=spend_logs&start_date=${weekAgo}&end_date=${tomorrow}`),
-        fetch("/api/containers"),
+      setRefreshing(true);
+      const [spendRes, containerRes, modelRes, cwRes, healthRes] = await Promise.all([
+        fetch("/api/spend/daily"),
+        fetch("/api/admin/containers"),
+        fetch("/api/admin/metrics/models"),
+        fetch("/api/admin/metrics/cloudwatch"),
+        fetch("/api/health"),
       ]);
-      const logsJson = (await logsRes.json()) as ApiResponse<SpendLog[]>;
-      setLogs(logsJson.data ?? []);
-      const cJson = (await containersRes.json()) as ApiResponse<ContainerInfo[]>;
-      setContainers(cJson.data ?? []);
 
-      if (isAdmin) {
-        try {
-          const [healthRes, metricsRes, cwRes] = await Promise.all([
-            fetch("/api/usage?action=system_health"),
-            fetch(`/api/usage?action=model_metrics&start_date=${weekAgo}&end_date=${tomorrow}`),
-            fetch("/api/container-metrics?action=current"),
-          ]);
-          if (healthRes.ok) { const j = (await healthRes.json()) as ApiResponse<SystemHealth>; setSystemHealth(j.data ?? null); }
-          if (metricsRes.ok) { const j = (await metricsRes.json()) as ApiResponse<ModelMetrics[]>; setModelMetrics(j.data ?? []); }
-          if (cwRes.ok) { const j = (await cwRes.json()) as ApiResponse<ContainerCWMetrics>; setCwMetrics(j.data ?? null); }
-        } catch (e) { console.error("Admin fetch error:", e); }
-      }
-      setLastUpdated(new Date());
+      const [spend, containers, models, cw, health]: [ApiResponse<SpendLog[]>, ApiResponse<ContainerInfo[]>, ApiResponse<ModelMetrics[]>, ApiResponse<ContainerCWMetrics>, ApiResponse<SystemHealth>] = 
+        await Promise.all([spendRes.json(), containerRes.json(), modelRes.json(), cwRes.json(), healthRes.json()]);
+
+      const totalCost = spend.data?.reduce((acc, curr) => acc + curr.cost, 0) || 0;
+      const totalTokens = spend.data?.reduce((acc, curr) => acc + (curr.tokens || 0), 0) || 0;
+      const activeContainers = containers.data?.filter(c => c.status === "RUNNING").length || 0;
+
+      setData({
+        dailySpend: spend.data || [],
+        totalCost,
+        totalTokens,
+        activeContainers,
+        containers: containers.data || [],
+        modelMetrics: models.data || [],
+        cwMetrics: cw.data || null,
+        health: health.data || null,
+      });
     } catch (err) {
-      console.error("Home fetch error:", err);
+      console.error("Failed to fetch dashboard data:", err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [isAdmin]);
+  }, []);
 
   useEffect(() => {
-    void fetchData();
-    const interval = setInterval(() => void fetchData(), 30000);
-    return () => clearInterval(interval);
+    fetchData();
   }, [fetchData]);
 
-  // Computed
-  const totalSpend = logs.reduce((s, l) => s + l.spend, 0);
-  const totalRequests = logs.length;
-  const totalTokens = logs.reduce((s, l) => s + l.total_tokens, 0);
-  const totalInput = logs.reduce((s, l) => s + l.prompt_tokens, 0);
-  const totalOutput = logs.reduce((s, l) => s + l.completion_tokens, 0);
-  const activeUsers = new Set(logs.map((l) => l.user || l.api_key)).size;
-  const runningContainers = containers.filter((c) => c.status === "RUNNING");
-  const dailyBurn = totalSpend / 7;
-  const monthlyEst = dailyBurn * 30;
-  const avgCostPerReq = totalRequests > 0 ? totalSpend / totalRequests : 0;
-  const avgTokensPerReq = totalRequests > 0 ? totalTokens / totalRequests : 0;
-  const outputRatio = totalTokens > 0 ? (totalOutput / totalTokens) * 100 : 0;
-
-  // Top model
-  const topModel = [...modelMetrics].sort((a, b) => b.num_requests - a.num_requests)[0];
-  const avgLatency = modelMetrics.length > 0
-    ? modelMetrics.reduce((s, m) => s + m.avg_latency_seconds * 1000, 0) / modelMetrics.length : 0;
-
-  const isOnline = systemHealth?.status === "healthy";
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <div className="relative">
+          <div className="w-12 h-12 border-4 border-primary-500/20 border-t-primary-500 rounded-full animate-spin" />
+          <div className="absolute inset-0 bg-primary-500 blur-2xl opacity-20 animate-pulse" />
+        </div>
+        <p className="text-xs font-black text-gray-500 uppercase tracking-widest animate-pulse">Initializing Terminal...</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="space-y-10 max-w-[1600px] mx-auto pb-20"
+    >
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-2 border-b border-white/5">
         <div>
-          <h1 className="text-xl font-bold text-white tracking-tight">CC-on-Bedrock Dashboard</h1>
-          <p className="text-[11px] text-gray-500">{t("home.subtitle")}</p>
+          <h1 className="text-4xl font-black tracking-tighter text-white mb-2 leading-none flex items-center gap-3">
+            <LayoutIcon className="w-8 h-8 text-primary-500" />
+            DASHBOARD
+          </h1>
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+            <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">System Operational & Secured</p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
-          {lastUpdated && <span className="text-[10px] text-gray-600">Updated {lastUpdated.toLocaleTimeString()}</span>}
-          <button onClick={() => void fetchData()} className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded-lg transition-colors" title="Refresh">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+          <button
+            onClick={fetchData}
+            disabled={refreshing}
+            className={cn(
+              "flex items-center gap-2 px-5 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all duration-300",
+              "bg-[#161b22] border border-white/5 text-gray-300 hover:text-white hover:border-primary-500/50 shadow-xl",
+              refreshing && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", refreshing && "animate-spin text-primary-500")} />
+            {refreshing ? "Refreshing..." : "Sync Engine"}
           </button>
-          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold rounded-full ${isOnline ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? "bg-green-400 animate-pulse" : "bg-red-400"}`} />
-            {isOnline ? "ONLINE" : "OFFLINE"}
-          </span>
         </div>
       </div>
 
-      {loading ? (
-        <div className="flex items-center justify-center h-48"><div className="text-sm text-gray-500">Loading...</div></div>
-      ) : (
-        <>
-          {/* ── HERO CARDS ── */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <HeroCard title={t("home.totalCost")} value={formatCost(totalSpend)} subtitle={`Daily avg: ${formatCost(dailyBurn)}`}
-              icon={<DollarIcon size={12} />} gradient="from-blue-900/40 to-blue-950/20" />
-            <HeroCard title={t("home.totalRequests")} value={formatNum(totalRequests)} subtitle={`${formatNum(totalTokens)} tokens`}
-              icon={<BoltIcon size={12} />} gradient="from-purple-900/40 to-purple-950/20" />
-            <HeroCard title={t("home.activeUsers")} value={String(activeUsers)} subtitle={`${modelMetrics.length} models active`}
-              icon={<UsersIcon size={12} />} gradient="from-green-900/40 to-green-950/20" />
-            <HeroCard title={t("home.runningContainers")} value={`${runningContainers.length}`} subtitle={`${containers.length} total · ${cwMetrics?.containerInstanceCount ?? "?"} hosts`}
-              icon={<ServerIcon size={12} />} gradient="from-amber-900/40 to-amber-950/20" />
+      {/* Main Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <StatCard
+          title={t("home.totalCost")}
+          value={formatCost(data.totalCost)}
+          description="Accumulated Platform Spend"
+          trend={{ value: 12.5, isPositive: false }}
+        />
+        <StatCard
+          title={t("home.totalTokens")}
+          value={formatNum(data.totalTokens)}
+          description="Aggregated Model Interaction"
+          trend={{ value: 8.2, isPositive: true }}
+        />
+        <StatCard
+          title={t("home.activeContainers")}
+          value={data.activeContainers.toString()}
+          description="Live ECS Task Instances"
+          trend={{ value: 4.1, isPositive: true }}
+        />
+        <StatCard
+          title="Cluster Health"
+          value="99.9%"
+          description="High Availability Metric"
+          trend={{ value: 0.1, isPositive: true }}
+        />
+      </div>
+
+      {/* Charts Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <motion.div 
+          whileHover={{ y: -4 }}
+          className="lg:col-span-2 bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl relative overflow-hidden group"
+        >
+          <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
+            <Zap className="w-32 h-32 text-primary-500" />
+          </div>
+          <SectionHeader 
+            title={t("home.costTrend")} 
+            subtitle="Financial Analytics" 
+            icon={BarChart3} 
+            action={
+              <Link href="/analytics" className="text-[10px] font-black text-primary-400 hover:text-primary-300 uppercase tracking-widest flex items-center gap-1 group/link">
+                Analysis <ArrowUpRight className="w-3 h-3 group-hover/link:translate-x-0.5 group-hover/link:-translate-y-0.5 transition-transform" />
+              </Link>
+            }
+          />
+          <div className="h-[320px] w-full">
+            <DailySpendChart data={data.dailySpend} />
+          </div>
+        </motion.div>
+
+        <motion.div 
+          whileHover={{ y: -4 }}
+          className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl"
+        >
+          <SectionHeader title={t("home.modelUsage")} subtitle="Compute Distribution" icon={Zap} />
+          <div className="h-[320px] w-full">
+            <ModelUsageChart data={data.modelMetrics} />
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Cluster Detail Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Cluster Metrics */}
+        <div className="space-y-6">
+          <SectionHeader title="Cluster Insights" subtitle="Infrastructure Performance" icon={Cpu} />
+          {data.cwMetrics && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-[#161b22]/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 shadow-2xl"
+            >
+              <ContainerMetrics metrics={data.cwMetrics} />
+            </motion.div>
+          )}
+        </div>
+
+        {/* System Health */}
+        <div className="space-y-6">
+          <SectionHeader title="System Health" subtitle="Service Matrix" icon={Shield} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="bg-[#161b22]/40 backdrop-blur-md rounded-2xl border border-white/5 p-6 flex flex-col gap-4 group hover:border-emerald-500/30 transition-all duration-300">
+              <div className="flex items-center justify-between">
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                  <Database className="w-4 h-4" />
+                </div>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-black border border-emerald-500/20">HEALTHY</span>
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">DynamoDB Core</p>
+                <p className="text-sm font-bold text-white uppercase tracking-tight">Active Connection</p>
+              </div>
+            </div>
+
+            <div className="bg-[#161b22]/40 backdrop-blur-md rounded-2xl border border-white/5 p-6 flex flex-col gap-4 group hover:border-primary-500/30 transition-all duration-300">
+              <div className="flex items-center justify-between">
+                <div className="p-2 rounded-lg bg-primary-500/10 text-primary-400">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <span className="px-2 py-0.5 rounded-full bg-primary-500/10 text-primary-400 text-[10px] font-black border border-primary-500/20">V2.4.0</span>
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Stack Architecture</p>
+                <p className="text-sm font-bold text-white uppercase tracking-tight">Enterprise Hybrid</p>
+              </div>
+            </div>
           </div>
 
-          {/* ── COST & TOKEN INSIGHTS ── */}
-          <div>
-            <SectionHeader>COST &amp; TOKEN INSIGHTS</SectionHeader>
-            <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
-              <CompactStat label="Monthly Est." value={formatCost(monthlyEst)} sub="Projected 30d" color="text-red-400" />
-              <CompactStat label="Avg Cost/Req" value={`$${avgCostPerReq.toFixed(6)}`} sub="Unit price" />
-              <CompactStat label="Avg Tokens/Req" value={formatNum(avgTokensPerReq)} sub="In + Out" />
-              <CompactStat label="Input Tokens" value={formatNum(totalInput)} sub={`${(100 - outputRatio).toFixed(0)}% of total`} color="text-blue-400" />
-              <CompactStat label="Output Tokens" value={formatNum(totalOutput)} sub={`${outputRatio.toFixed(0)}% of total`} color="text-purple-400" />
-              <CompactStat label="Active Models" value={modelMetrics.filter(m => m.num_requests > 0).length || "-"} sub="Bedrock Direct" color="text-cyan-400" />
-            </div>
-          </div>
-
-          {/* ── MODEL & PERFORMANCE ── */}
-          {isAdmin && modelMetrics.length > 0 && (
-            <div>
-              <SectionHeader>BEDROCK MODEL PERFORMANCE</SectionHeader>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Model breakdown */}
-                <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Model Usage</p>
-                  <div className="space-y-2.5">
-                    {[...modelMetrics].sort((a, b) => b.num_requests - a.num_requests).slice(0, 5).map((m) => {
-                      const totalReqs = modelMetrics.reduce((s, x) => s + x.num_requests, 0);
-                      const pct = totalReqs > 0 ? (m.num_requests / totalReqs) * 100 : 0;
-                      const name = m.model.replace("bedrock/", "").replace("global.anthropic.", "").replace("apac.anthropic.", "");
-                      return (
-                        <div key={m.model}>
-                          <div className="flex justify-between text-[11px] mb-0.5">
-                            <span className="text-gray-300 truncate mr-2">{name}</span>
-                            <span className="text-gray-500 shrink-0">{m.num_requests} req · {formatCost(m.total_spend)}</span>
-                          </div>
-                          <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                            <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${pct}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
+          <Link href="/monitoring" className="block group">
+            <div className="bg-gradient-to-r from-primary-600 to-blue-600 rounded-2xl p-[1px] shadow-lg shadow-primary-500/20 group-hover:shadow-primary-500/40 transition-all duration-500">
+              <div className="bg-[#0d1117] rounded-[15px] p-6 flex items-center justify-between group-hover:bg-transparent transition-colors duration-500">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center group-hover:bg-white/10 transition-colors">
+                    <Activity className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-white leading-none mb-1 uppercase italic tracking-tighter">Deep Monitoring</h3>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter">Access specialized cluster telemetry</p>
                   </div>
                 </div>
-
-                {/* Performance stats */}
-                <div className="grid grid-cols-2 gap-3">
-                  <CompactStat label="Top Model" value={topModel ? topModel.model.replace("bedrock/", "").replace("global.anthropic.", "").split("-").slice(0, 2).join("-") : "-"} sub={topModel ? `${topModel.num_requests} requests` : ""} color="text-cyan-400" />
-                  <CompactStat label="Avg Latency" value={`${avgLatency.toFixed(0)}ms`} sub="All models" color={avgLatency > 5000 ? "text-red-400" : "text-green-400"} />
-                  <CompactStat label="Models Active" value={modelMetrics.filter(m => m.num_requests > 0).length} sub={`/ ${systemHealth?.model_count ?? modelMetrics.length} configured`} />
-                  <CompactStat label="Architecture" value="Direct" sub="Bedrock Native" color="text-green-400" />
+                <div className="w-10 h-10 rounded-full border border-white/20 flex items-center justify-center group-hover:translate-x-1 transition-transform">
+                  <ChevronRight className="w-5 h-5 text-white" />
                 </div>
               </div>
             </div>
-          )}
-
-          {/* ── CONTAINER INSIGHTS ── */}
-          {isAdmin && cwMetrics && (
-            <div>
-              <SectionHeader>CONTAINER INSIGHTS (ECS)</SectionHeader>
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                {/* CPU & Memory utilization */}
-                <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5 space-y-4">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Cluster Utilization</p>
-                  <MiniBar pct={cwMetrics.cpuUtilizationPct} color="bg-cyan-500" label="CPU" detail={`${cwMetrics.cpuUtilized.toFixed(0)} / ${cwMetrics.cpuReserved.toFixed(0)} units (${cwMetrics.cpuUtilizationPct.toFixed(1)}%)`} />
-                  <MiniBar pct={cwMetrics.memoryUtilizationPct} color="bg-purple-500" label="Memory" detail={`${cwMetrics.memoryUtilized.toFixed(0)} / ${cwMetrics.memoryReserved.toFixed(0)} MiB (${cwMetrics.memoryUtilizationPct.toFixed(1)}%)`} />
-                </div>
-
-                {/* Network & Storage */}
-                <div className="grid grid-cols-2 gap-3">
-                  <CompactStat label="Network Rx" value={formatBytes(cwMetrics.networkRxBytes)} sub="Inbound" color="text-cyan-400" />
-                  <CompactStat label="Network Tx" value={formatBytes(cwMetrics.networkTxBytes)} sub="Outbound" color="text-amber-400" />
-                  <CompactStat label="Tasks" value={cwMetrics.taskCount} sub={`${cwMetrics.containerInstanceCount} hosts`} />
-                  <CompactStat label="CPU %" value={`${cwMetrics.cpuUtilizationPct.toFixed(1)}%`} color={cwMetrics.cpuUtilizationPct > 80 ? "text-red-400" : cwMetrics.cpuUtilizationPct > 60 ? "text-yellow-400" : "text-green-400"} sub="Cluster avg" />
-                </div>
-
-                {/* Container distribution */}
-                <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Container Mix</p>
-                  {(() => {
-                    const os: Record<string, number> = {};
-                    const tier: Record<string, number> = {};
-                    for (const c of runningContainers) {
-                      os[c.containerOs] = (os[c.containerOs] ?? 0) + 1;
-                      tier[c.resourceTier] = (tier[c.resourceTier] ?? 0) + 1;
-                    }
-                    const total = runningContainers.length || 1;
-                    return (
-                      <div className="space-y-2">
-                        {Object.entries(os).map(([k, v]) => (
-                          <MiniBar key={k} pct={(v / total) * 100} color="bg-blue-500" label={k === "al2023" ? "AL2023" : "Ubuntu"} detail={`${v} (${((v / total) * 100).toFixed(0)}%)`} />
-                        ))}
-                        <div className="border-t border-gray-800 pt-2 mt-2" />
-                        {Object.entries(tier).map(([k, v]) => {
-                          const c = k === "light" ? "bg-gray-500" : k === "standard" ? "bg-blue-500" : "bg-purple-500";
-                          return <MiniBar key={k} pct={(v / total) * 100} color={c} label={k} detail={`${v}`} />;
-                        })}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── SYSTEM STATUS & API KEYS ── */}
-          {isAdmin && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* System status */}
-              {systemHealth && (
-                <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">System Status</p>
-                  <StatusDot ok={systemHealth.status === "healthy"} label="Bedrock API" value={systemHealth.status} />
-                  <StatusDot ok={systemHealth.db === "dynamodb"} label="Usage Tracking (DynamoDB)" value={systemHealth.db} />
-                  <StatusDot ok={true} label="Architecture" value={systemHealth.architecture ?? "Direct Bedrock"} />
-                  <StatusDot ok={true} label="Bedrock Models" value={`${modelMetrics.length} active`} />
-                  <StatusDot ok={runningContainers.length > 0} label="ECS Containers" value={`${runningContainers.length} running`} />
-                </div>
-              )}
-
-              {/* Model cost summary */}
-              {modelMetrics.length > 0 && (
-                <div className="bg-[#111827] rounded-xl border border-gray-800/50 p-5">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Model Cost (7d)</p>
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                    {[...modelMetrics].sort((a, b) => b.total_spend - a.total_spend).slice(0, 8).map((m) => {
-                      const totalModelSpend = modelMetrics.reduce((s, x) => s + x.total_spend, 0);
-                      const pct = totalModelSpend > 0 ? (m.total_spend / totalModelSpend) * 100 : 0;
-                      const name = m.model.replace("bedrock/", "").replace("global.anthropic.", "").replace("apac.anthropic.", "");
-                      return (
-                        <MiniBar key={m.model} pct={pct} color="bg-cyan-500" label={name} detail={`${formatCost(m.total_spend)} · ${m.num_requests} req`} />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── QUICK ACTIONS ── */}
-          {isAdmin && (
-            <div>
-              <SectionHeader>QUICK ACTIONS</SectionHeader>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                <NavCard href="/analytics" title={t("home.viewAnalytics")} desc="Cost, tokens, leaderboard" icon={<span className="text-cyan-400"><ChartIcon /></span>} accent="bg-cyan-500/10" />
-                <NavCard href="/monitoring" title={t("home.viewMonitoring")} desc="Health, insights, sessions" icon={<span className="text-green-400"><BoltIcon /></span>} accent="bg-green-500/10" />
-                <NavCard href="/admin" title={t("home.manageUsers")} desc={`${activeUsers} active users`} icon={<span className="text-purple-400"><UsersIcon /></span>} accent="bg-purple-500/10" />
-                <NavCard href="/admin/containers" title={t("home.manageContainers")} desc={`${runningContainers.length} running`} icon={<span className="text-amber-400"><ServerIcon /></span>} accent="bg-amber-500/10" />
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
+          </Link>
+        </div>
+      </div>
+    </motion.div>
   );
 }

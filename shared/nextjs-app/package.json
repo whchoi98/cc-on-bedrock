@@ -24,6 +24,9 @@
     "@aws-sdk/client-route53resolver": "^3.1014.0",
     "@aws-sdk/client-secrets-manager": "^3.1019.0",
     "@aws-sdk/util-dynamodb": "^3.996.2",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.7.0",
     "next": "^14.2.21",
     "next-auth": "^4.24.11",
     "react": "^18.3.1",
@@ -31,6 +34,7 @@
     "react-markdown": "^10.1.0",
     "recharts": "^2.15.0",
     "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.5.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
