@@ -27,7 +27,12 @@ else
   EFS_USER_DIR="$USER_HOME/users/$SUBDOMAIN"
   echo "Using shared EFS with subdirectory: $EFS_USER_DIR"
 fi
-USER_WORKSPACE="$EFS_USER_DIR/workspace"
+# Workspace: isolated storage uses /home/coder directly, shared uses subdirectory
+if [ "$EFS_USER_DIR" = "$USER_HOME" ]; then
+  USER_WORKSPACE="$USER_HOME"
+else
+  USER_WORKSPACE="$EFS_USER_DIR/workspace"
+fi
 USER_DATA_DIR="$EFS_USER_DIR/.local/share/code-server"
 USER_CONFIG_DIR="$EFS_USER_DIR/.config"
 
