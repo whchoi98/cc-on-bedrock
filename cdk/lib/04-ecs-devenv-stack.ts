@@ -461,6 +461,95 @@ export class EcsDevenvStack extends cdk.Stack {
       targets: [new targets.LambdaFunction(idleCheckLambda)],
     });
 
+    // ─── EBS Volume Management ───
+
+    const userVolumesTable = new dynamodb.Table(this, 'UserVolumesTable', {
+      tableName: 'cc-user-volumes',
+      partitionKey: { name: 'user_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    const ebsLifecycleLambda = new lambda.Function(this, 'EbsLifecycle', {
+      functionName: 'cc-ebs-lifecycle',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'ebs-lifecycle.handler',
+      code: lambda.Code.fromAsset('lib/lambda'),
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 256,
+      environment: {
+        DYNAMODB_TABLE: userVolumesTable.tableName,
+      },
+    });
+
+    userVolumesTable.grantReadWriteData(ebsLifecycleLambda);
+    ebsLifecycleLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'ec2:CreateVolume', 'ec2:DeleteVolume', 'ec2:DescribeVolumes',
+        'ec2:CreateSnapshot', 'ec2:DeleteSnapshot', 'ec2:DescribeSnapshots',
+        'ec2:CreateTags',
+      ],
+      resources: ['*'],
+      conditions: {
+        StringEquals: { 'aws:RequestedRegion': cdk.Aws.REGION },
+      },
+    }));
+
+    // ─── Warm Stop Lambda (idle → stop + snapshot) ───
+
+    const warmStopLambda = new lambda.Function(this, 'WarmStop', {
+      functionName: 'cc-warm-stop',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'warm-stop.handler',
+      code: lambda.Code.fromAsset('lib/lambda'),
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 256,
+      environment: {
+        REGION: cdk.Aws.REGION,
+        ECS_CLUSTER: config.ecsClusterName,
+        VOLUMES_TABLE: userVolumesTable.tableName,
+        IDLE_THRESHOLD_MINUTES: '30',
+        EBS_LIFECYCLE_LAMBDA: ebsLifecycleLambda.functionName,
+      },
+    });
+
+    userVolumesTable.grantReadWriteData(warmStopLambda);
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ecs:ListTasks', 'ecs:DescribeTasks', 'ecs:StopTask'],
+      resources: ['*'],
+    }));
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:GetMetricStatistics'],
+      resources: ['*'],
+    }));
+    ebsLifecycleLambda.grantInvoke(warmStopLambda);
+    // Self-invoke permission for async warm_stop (add inline to avoid circular dep)
+    warmStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-warm-stop`],
+    }));
+
+    // Warm stop: EventBridge 5-min schedule (check_idle action)
+    new events.Rule(this, 'WarmStopSchedule', {
+      ruleName: 'cc-warm-stop-5min',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+      targets: [new targets.LambdaFunction(warmStopLambda, {
+        event: events.RuleTargetInput.fromObject({ action: 'check_idle' }),
+      })],
+    });
+
+    // Scheduled shutdown at 18:00 KST (09:00 UTC)
+    new events.Rule(this, 'ScheduledShutdown', {
+      ruleName: 'cc-scheduled-shutdown-1800',
+      schedule: events.Schedule.cron({ hour: '9', minute: '0' }),
+      targets: [new targets.LambdaFunction(warmStopLambda, {
+        event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
+      })],
+    });
+
+    new cdk.CfnOutput(this, 'UserVolumesTableName', { value: userVolumesTable.tableName, exportName: 'cc-user-volumes-table' });
+
     // ─── Route 53 Wildcard Record ───
 
     new route53.ARecord(this, 'DevEnvWildcard', {

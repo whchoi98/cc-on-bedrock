@@ -61,6 +61,7 @@ export class SecurityStack extends cdk.Stack {
         container_id: new cognito.StringAttribute({ mutable: true }),
         department: new cognito.StringAttribute({ mutable: true }),
         budget_exceeded: new cognito.StringAttribute({ mutable: true }),
+        storage_type: new cognito.StringAttribute({ mutable: true }),
       },
     });
 
