@@ -165,10 +165,13 @@ export interface TaskMetrics {
   }>;
 }
 
-export async function getTaskMetrics(taskId: string): Promise<TaskMetrics> {
+export async function getTaskMetrics(taskId: string, taskDefFamily?: string): Promise<TaskMetrics> {
   const end = new Date();
   const start = new Date(end.getTime() - 60 * 60 * 1000); // last 1 hour
-  const taskDims = [{ Name: "TaskId", Value: taskId }];
+  // Container Insights only has TaskDefinitionFamily dimension, not TaskId
+  const taskDims = taskDefFamily
+    ? [{ Name: "TaskDefinitionFamily", Value: taskDefFamily }]
+    : [{ Name: "TaskDefinitionFamily", Value: "devenv-ubuntu-power" }];
 
   const result = await cwClient.send(
     new GetMetricDataCommand({
