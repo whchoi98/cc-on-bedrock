@@ -301,24 +301,36 @@ export class EcsDevenvStack extends cdk.Stack {
           }),
         });
 
-        // EFS Volume
-        // NOTE: For user isolation, override rootDirectory at RunTask time
-        // with /users/{subdomain} to prevent cross-user file access.
-        // Or create per-user EFS Access Points for stronger isolation.
+        // EFS Volume — shared storage (always available)
         taskDef.addVolume({
           name: 'efs-workspace',
           efsVolumeConfiguration: {
             fileSystemId: fileSystem.fileSystemId,
-            rootDirectory: '/',  // Override per-user at RunTask: /users/{subdomain}
+            rootDirectory: '/',
             transitEncryption: 'ENABLED',
           },
         });
 
-        container.addMountPoints({
-          sourceVolume: 'efs-workspace',
-          containerPath: '/home/coder',
-          readOnly: false,
+        // EBS Volume — user data (configuredAtLaunch, attached via RunTask volumeConfigurations)
+        taskDef.addVolume({
+          name: 'user-data',
+          configuredAtLaunch: true,
         });
+
+        if (isEbsMode(config)) {
+          // EBS mode: user-data (EBS) → /home/coder, EFS → /efs (shared tools)
+          container.addMountPoints(
+            { sourceVolume: 'user-data', containerPath: '/home/coder', readOnly: false },
+            { sourceVolume: 'efs-workspace', containerPath: '/efs', readOnly: false },
+          );
+        } else {
+          // EFS mode: EFS → /home/coder (primary), user-data volume declared but unused
+          container.addMountPoints({
+            sourceVolume: 'efs-workspace',
+            containerPath: '/home/coder',
+            readOnly: false,
+          });
+        }
       }
     }
 

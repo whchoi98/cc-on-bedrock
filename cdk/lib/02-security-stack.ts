@@ -27,6 +27,7 @@ export class SecurityStack extends cdk.Stack {
   public readonly litellmEc2Role: iam.Role;
   public readonly dashboardEc2Role: iam.Role;
   public readonly taskPermissionBoundary: iam.ManagedPolicy;
+  public readonly ecsInfrastructureRole: iam.Role;
 
   constructor(scope: Construct, id: string, props: SecurityStackProps) {
     super(scope, id, props);
@@ -203,6 +204,15 @@ export class SecurityStack extends cdk.Stack {
           actions: ['secretsmanager:GetSecretValue'],
           resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
         }),
+      ],
+    });
+
+    // ECS Infrastructure Role — required for EBS volume attachment to tasks
+    this.ecsInfrastructureRole = new iam.Role(this, 'EcsInfrastructureRole', {
+      roleName: 'cc-on-bedrock-ecs-infrastructure',
+      assumedBy: new iam.ServicePrincipal('ecs.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSInfrastructureRolePolicyForVolumes'),
       ],
     });
 

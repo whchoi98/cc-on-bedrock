@@ -70,6 +70,8 @@ const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
 const lambdaClient = new LambdaClient({ region });
 const s3SyncBucket = process.env.S3_SYNC_BUCKET ?? "";
+const ecsInfrastructureRoleArn = process.env.ECS_INFRASTRUCTURE_ROLE_ARN ?? "";
+const kmsKeyArn = process.env.KMS_KEY_ARN ?? "";
 
 const MAX_COGNITO_PAGES = 20;
 
@@ -573,6 +575,21 @@ export async function startContainer(
   }
   const secretArn = `arn:aws:secretsmanager:${region}:${accountId}:secret:${secretName}`;
 
+  // EBS mode: look up snapshot for data restoration
+  let ebsSnapshotId: string | undefined;
+  if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
+    try {
+      const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
+      const ddb = new DynamoDBClient({ region });
+      const volResult = await ddb.send(new DDBGetItem({
+        TableName: "cc-user-volumes",
+        Key: { user_id: { S: input.subdomain } },
+      }));
+      ebsSnapshotId = volResult.Item?.snapshotId?.S;
+      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}`);
+    } catch { /* no snapshot — new volume */ }
+  }
+
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
@@ -587,6 +604,30 @@ export async function startContainer(
           assignPublicIp: "DISABLED",
         },
       },
+      // EBS native volume: ECS auto-creates, attaches, and mounts to /home/coder
+      ...(input.storageType === "ebs" && ecsInfrastructureRoleArn ? {
+        volumeConfigurations: [{
+          name: "user-data",
+          managedEBSVolume: {
+            roleArn: ecsInfrastructureRoleArn,
+            volumeType: "gp3",
+            sizeInGiB: 20,
+            encrypted: true,
+            ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
+            ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),
+            filesystemType: "ext4",
+            tagSpecifications: [{
+              resourceType: "volume",
+              tags: [
+                { key: "user_id", value: input.subdomain },
+                { key: "managed_by", value: "cc-on-bedrock" },
+              ],
+              propagateTags: "NONE",
+            }],
+            terminationPolicy: { deleteOnTermination: false },
+          },
+        }],
+      } : {}),
       overrides: {
         // Per-user Task Role for individual budget control
         taskRoleArn: userTaskRoleArn,

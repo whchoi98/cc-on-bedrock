@@ -28,6 +28,7 @@ export interface DashboardStackProps extends cdk.StackProps {
   sgRestricted: ec2.ISecurityGroup;
   sgLocked: ec2.ISecurityGroup;
   efsFileSystemId: string;
+  ecsInfrastructureRoleArn?: string;
   webAclArn?: string;
 }
 
@@ -199,6 +200,8 @@ export class DashboardStack extends cdk.Stack {
         `S3_SYNC_BUCKET=${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
         `EFS_FILE_SYSTEM_ID=${props.efsFileSystemId}`,
         'ROUTING_TABLE=cc-routing-table',
+        `ECS_INFRASTRUCTURE_ROLE_ARN=${props.ecsInfrastructureRoleArn ?? ''}`,
+        `KMS_KEY_ARN=${encryptionKey.keyArn}`,
         'ENVEOF',
         'chmod 600 /opt/dashboard/.next/standalone/.env',
         '',
