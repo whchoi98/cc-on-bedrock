@@ -68,6 +68,18 @@ export async function PUT(req: NextRequest) {
 
   try {
     const raw = await req.json();
+
+    // Handle enable/disable action
+    if (raw.action === "enable" || raw.action === "disable") {
+      if (!raw.username) {
+        return NextResponse.json({ success: false, error: "username is required" }, { status: 400 });
+      }
+      if (raw.action === "enable") await enableCognitoUser(raw.username);
+      else await disableCognitoUser(raw.username);
+      return NextResponse.json({ success: true });
+    }
+
+    // Handle attribute update
     const parsed = updateUserSchema.safeParse(raw);
     if (!parsed.success) {
       return NextResponse.json({ success: false, error: parsed.error.issues[0].message }, { status: 400 });

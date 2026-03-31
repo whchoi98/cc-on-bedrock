@@ -96,10 +96,11 @@ export default function UserManagement() {
 
   const handleToggle = async (username: string, enable: boolean) => {
     try {
-      await fetch(
-        `/api/users?username=${encodeURIComponent(username)}&action=${enable ? "enable" : "disable"}`,
-        { method: "DELETE" }
-      );
+      await fetch("/api/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, action: enable ? "enable" : "disable" }),
+      });
       void fetchUsers();
     } catch (err) {
       console.error("Failed to toggle user:", err);

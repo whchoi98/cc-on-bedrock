@@ -809,6 +809,22 @@ export async function startContainerWithProgress(
 
   // Step 5: Container Start
   onProgress(5, "container_start", "in_progress", "Starting ECS task...");
+
+  // EBS mode: look up snapshot for data restoration
+  let ebsSnapshotId: string | undefined;
+  if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
+    try {
+      const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
+      const ddb = new DynamoDBClient({ region });
+      const volResult = await ddb.send(new DDBGetItem({
+        TableName: "cc-user-volumes",
+        Key: { user_id: { S: input.subdomain } },
+      }));
+      ebsSnapshotId = volResult.Item?.snapshotId?.S;
+      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}`);
+    } catch { /* no snapshot — new volume */ }
+  }
+
   // EBS volumes require capacityProviderStrategy (launchType: "EC2" doesn't support managed EBS)
   const capacityProvider = await getCapacityProviderName();
 
@@ -838,6 +854,7 @@ export async function startContainerWithProgress(
             sizeInGiB: 20,
             encrypted: true,
             ...(kmsKeyArn ? { kmsKeyId: kmsKeyArn } : {}),
+            ...(ebsSnapshotId ? { snapshotId: ebsSnapshotId } : {}),
             filesystemType: "ext4",
             tagSpecifications: [{
               resourceType: "volume",
