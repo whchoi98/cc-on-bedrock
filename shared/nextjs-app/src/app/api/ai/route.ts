@@ -195,17 +195,21 @@ Use markdown tables for comparisons. Format numbers clearly.`;
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.isAdmin) {
-    return new Response(JSON.stringify({ error: "Admin access required" }), {
-      status: 403, headers: { "Content-Type": "application/json" },
+  if (!session?.user) {
+    return new Response(JSON.stringify({ error: "Authentication required" }), {
+      status: 401, headers: { "Content-Type": "application/json" },
     });
   }
 
-  const body = await req.json();
-  const { messages: userMessages, lang = "ko" } = body as {
-    messages: { role: string; content: string }[];
-    lang?: string;
-  };
+  let body: { messages: { role: string; content: string }[]; lang?: string };
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid request body" }), {
+      status: 400, headers: { "Content-Type": "application/json" },
+    });
+  }
+  const { messages: userMessages, lang = "ko" } = body;
 
   let controllerClosed = false;
 

@@ -36,7 +36,7 @@ const navItems: NavItem[] = [
   { href: "/", labelKey: "nav.home", icon: Home },
   { href: "/user", labelKey: "nav.myEnv", icon: Terminal, showForAll: true },
   { href: "/dept", labelKey: "nav.department", icon: Building2, deptManagerOnly: true },
-  { href: "/ai", labelKey: "nav.ai", icon: Sparkles, adminOnly: true },
+  { href: "/ai", labelKey: "nav.ai", icon: Sparkles },
   { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
   { href: "/monitoring", labelKey: "nav.monitoring", icon: Activity, adminOnly: true },
   { href: "/security", labelKey: "nav.security", icon: ShieldCheck, adminOnly: true },
