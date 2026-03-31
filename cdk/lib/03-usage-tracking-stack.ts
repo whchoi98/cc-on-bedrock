@@ -74,7 +74,10 @@ export class UsageTrackingStack extends cdk.Stack {
     this.usageTable.grantReadWriteData(trackerLambda);
     trackerLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
-      resources: ['*'],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+      ],
     }));
 
     // EventBridge Rule: Bedrock API calls from CloudTrail
@@ -122,7 +125,10 @@ export class UsageTrackingStack extends cdk.Stack {
     // ECS: find and stop over-budget user containers
     budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks', 'ecs:StopTask'],
-      resources: ['*'],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+      ],
     }));
     // Cognito: set budget_exceeded flag (specific user pool, not wildcard)
     budgetCheckLambda.addToRolePolicy(new iam.PolicyStatement({
@@ -256,7 +262,10 @@ export class UsageTrackingStack extends cdk.Stack {
     // Idle check Lambda permissions
     idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
-      resources: ['*'],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+      ],
     }));
     idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudwatch:GetMetricStatistics', 'cloudwatch:GetMetricData'],
