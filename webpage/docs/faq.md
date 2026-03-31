@@ -226,16 +226,15 @@ ECS Task (Claude Code) → Bedrock API 호출
 
 ### Nginx Proxy를 Fargate로 전환하면 얼마나 절약되나요?
 
-Nginx Reverse Proxy는 매우 경량(0.25 vCPU, 128MB)이지만, EC2 모드에서는 사용자 태스크가 없어도 EC2 인스턴스를 유지해야 합니다.
+Nginx Reverse Proxy는 매우 경량(0.25 vCPU, 128MB)이지만, **현재 EC2 모드**에서는 사용자 태스크가 없어도 EC2 인스턴스를 유지해야 합니다. **Fargate 전환이 계획되어 있습니다.**
 
-| 시나리오 | EC2 (기존) | Fargate (전환) |
-|---------|-----------|--------------|
+| 시나리오 | EC2 (현재) | Fargate (전환 예정) |
+|---------|-----------|------------------|
 | **유휴 시** (사용자 0명) | m7g.4xlarge × 2 = ~$800/월 | 0.25vCPU × 2 = **~$18/월** |
 | **운영 시** (사용자 있음) | EC2 공존 = 추가 비용 없음 | $18 고정 추가 |
 
-:::tip 추천
-개발/테스트: **Fargate 전환** (유휴 비용 97% 절감)
-프로덕션 (상시 10+ 사용자): EC2 유지 (공존으로 추가 비용 없음)
+:::tip 전환 계획
+Nginx를 Fargate(0.25 vCPU, 512MB, ARM64)로 전환하면 유휴 비용 **97% 절감**. CDK에서 `Ec2TaskDefinition` → `FargateTaskDefinition`, `Ec2Service` → `FargateService`로 변경. HA 2 replica 유지.
 :::
 
 ### 예상 운영 비용은?
