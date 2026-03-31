@@ -205,7 +205,7 @@ export default function ContainersTable({
                   </td>
                   <td className="px-5 py-3.5 whitespace-nowrap">
                     {container.status === "RUNNING" && container.subdomain ? (
-                      container.healthStatus === "HEALTHY" ? (
+                      container.healthStatus === "HEALTHY" || container.healthStatus === "UNKNOWN" ? (
                         <a
                           href={url}
                           target="_blank"

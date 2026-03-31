@@ -211,7 +211,7 @@ mkdir -p /home/coder/.config/code-server
 cat > /home/coder/.config/code-server/config.yaml << CFGEOF
 bind-addr: 0.0.0.0:8080
 auth: ${CODESERVER_AUTH:-password}
-password: ${RESOLVED_PASSWORD}
+password: "${RESOLVED_PASSWORD}"
 cert: false
 CFGEOF
 chown coder:coder /home/coder/.config/code-server/config.yaml 2>/dev/null || true

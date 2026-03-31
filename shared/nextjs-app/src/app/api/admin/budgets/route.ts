@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
       results.departments = (deptResult.Items ?? []).map((item) => {
         const u = unmarshall(item);
         return {
-          department: u.department ?? u.PK?.replace("DEPT#", "") ?? "unknown",
+          department: u.dept_id ?? u.department ?? u.PK?.replace("DEPT#", "") ?? "unknown",
           monthlyBudget: Number(u.monthlyBudget ?? 0),
           currentSpend: Number(u.currentSpend ?? 0),
           updatedAt: u.updatedAt ?? "",
@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
       results.users = (userResult.Items ?? []).map((item) => {
         const u = unmarshall(item);
         return {
-          userId: u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
+          userId: u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
           department: u.department ?? "default",
           dailyTokenLimit: Number(u.dailyTokenLimit ?? 100000),
           monthlyBudget: Number(u.monthlyBudget ?? 0),
@@ -118,7 +118,7 @@ export async function PUT(req: NextRequest) {
       }
       await dynamodb.send(new UpdateItemCommand({
         TableName: DEPT_BUDGETS_TABLE,
-        Key: { department: { S: id } },
+        Key: { dept_id: { S: id } },
         UpdateExpression: "SET monthlyBudget = :budget, updatedAt = :now",
         ExpressionAttributeValues: {
           ":budget": { N: String(monthlyBudget) },
@@ -146,7 +146,7 @@ export async function PUT(req: NextRequest) {
 
       await dynamodb.send(new UpdateItemCommand({
         TableName: USER_BUDGETS_TABLE,
-        Key: { userId: { S: id } },
+        Key: { user_id: { S: id } },
         UpdateExpression: `SET ${updateParts.join(", ")}`,
         ExpressionAttributeValues: exprValues,
       }));

@@ -172,10 +172,32 @@ export async function POST(req: NextRequest) {
 
         if (!abortSignal.aborted) {
           if (registered) {
-            const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
-            send(6, "route_register", "completed", { message: "Route registered", url });
+            send(6, "route_register", "completed", { message: "Route registered" });
           } else {
             send(6, "route_register", "completed", { message: "Container started (route may take a moment)" });
+          }
+
+          // Step 7: Wait for code-server to be healthy before showing URL
+          send(7, "health_check", "in_progress", { message: "Waiting for code-server..." });
+          let healthy = false;
+          for (let i = 0; i < 30; i++) {
+            if (abortSignal.aborted) break;
+            await new Promise<void>((r) => {
+              const timer = setTimeout(r, 3000);
+              abortSignal.addEventListener("abort", () => { clearTimeout(timer); r(); }, { once: true });
+            });
+            if (abortSignal.aborted) break;
+            try {
+              const info = await describeContainer(taskArn);
+              if (info?.healthStatus === "HEALTHY") { healthy = true; break; }
+              send(7, "health_check", "in_progress", { message: `Health check... (${i + 1}/30)` });
+            } catch { /* retry */ }
+          }
+          const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
+          if (healthy) {
+            send(7, "health_check", "completed", { message: "code-server is ready!", url });
+          } else {
+            send(7, "health_check", "completed", { message: "Container running (health check pending)", url });
           }
         }
       } catch (err) {
