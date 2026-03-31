@@ -267,6 +267,7 @@ export class SecurityStack extends cdk.Stack {
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task`,
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task-execution`,
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-infrastructure`,
       ],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
