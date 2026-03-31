@@ -470,6 +470,11 @@ export class EcsDevenvStack extends cdk.Stack {
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+    userVolumesTable.addGlobalSecondaryIndex({
+      indexName: 'resizeStatus-index',
+      partitionKey: { name: 'resizeStatus', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
 
     const ebsLifecycleLambda = new lambda.Function(this, 'EbsLifecycle', {
       functionName: 'cc-ebs-lifecycle',

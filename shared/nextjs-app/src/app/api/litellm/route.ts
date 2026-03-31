@@ -1,5 +1,5 @@
 /**
- * Usage Analytics API Route (replaces LiteLLM API)
+ * Usage Analytics API Route
  * Data source: DynamoDB (cc-on-bedrock-usage) populated by Bedrock Invocation Logging
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
   try {
     switch (action) {
       case "spend_logs": {
-        // Compatible with old LiteLLM format for analytics dashboard
+        // SpendLog-compatible format for analytics dashboard
         const effectiveUserId = session.user.isAdmin ? userId : session.user.id;
         const records = await getUsageRecords({
           startDate,
@@ -111,7 +111,7 @@ export async function GET(req: NextRequest) {
             status: "healthy",
             db: "dynamodb",
             cache: "none",
-            litellm_version: "removed",
+            version: "direct-bedrock",
             model_count: 0,
             architecture: "Direct Bedrock",
           },

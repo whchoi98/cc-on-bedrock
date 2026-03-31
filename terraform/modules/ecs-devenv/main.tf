@@ -1,5 +1,5 @@
 ###############################################################################
-# ECS DevEnv Module - Cluster, Task Definitions, EFS, ALB, CloudFront, DLP SGs
+# ECS DevEnv Module - Cluster, Task Definitions, EFS, NLB+Nginx, CloudFront, DLP SGs
 # Equivalent to cdk/lib/04-ecs-devenv-stack.ts
 ###############################################################################
 
@@ -321,7 +321,6 @@ resource "aws_ecs_task_definition" "devenv" {
     portMappings = [{ containerPort = 8080 }]
 
     environment = [
-      { name = "ANTHROPIC_BASE_URL", value = "http://${var.litellm_alb_dns}:4000" },
       { name = "AWS_DEFAULT_REGION", value = "ap-northeast-2" },
       { name = "SECURITY_POLICY", value = "open" },
     ]
@@ -353,19 +352,117 @@ resource "aws_ecs_task_definition" "devenv" {
   tags = { Name = "devenv-${each.key}" }
 }
 
-# ---- ALB for Dev Environment -------------------------------------------------
-resource "aws_security_group" "alb" {
-  name_prefix = "cc-devenv-alb-"
-  description = "DevEnv ALB SG"
+# ════════════════════════════════════════════════════════════════════════════
+# NLB + Nginx Routing (replaces ALB — unlimited users, L4+L7)
+# Flow: CloudFront → NLB → Nginx → ECS Containers
+# ════════════════════════════════════════════════════════════════════════════
+
+# ---- DynamoDB Routing Table --------------------------------------------------
+resource "aws_dynamodb_table" "routing" {
+  name         = "cc-routing-table"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "subdomain"
+
+  attribute {
+    name = "subdomain"
+    type = "S"
+  }
+
+  stream_enabled   = true
+  stream_view_type = "NEW_AND_OLD_IMAGES"
+
+  tags = { Name = "cc-routing-table" }
+}
+
+# ---- S3 Bucket for Nginx Config ---------------------------------------------
+resource "aws_s3_bucket" "nginx_config" {
+  bucket        = "cc-on-bedrock-nginx-config-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+  tags          = { Name = "cc-nginx-config" }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "nginx_config" {
+  bucket = aws_s3_bucket.nginx_config.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# ---- Nginx Config Generator Lambda ------------------------------------------
+data "archive_file" "nginx_config_gen" {
+  type        = "zip"
+  source_file = "${path.module}/../../cdk/lib/lambda/nginx-config-gen.py"
+  output_path = "${path.module}/.build/nginx-config-gen.zip"
+}
+
+resource "aws_iam_role" "nginx_config_gen" {
+  name = "cc-nginx-config-gen"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "nginx_config_gen_basic" {
+  role       = aws_iam_role.nginx_config_gen.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "nginx_config_gen" {
+  name = "dynamodb-s3-access"
+  role = aws_iam_role.nginx_config_gen.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:Query"], Resource = aws_dynamodb_table.routing.arn },
+      { Effect = "Allow", Action = ["s3:PutObject"], Resource = "${aws_s3_bucket.nginx_config.arn}/*" },
+    ]
+  })
+}
+
+resource "aws_lambda_function" "nginx_config_gen" {
+  function_name    = "cc-nginx-config-gen"
+  handler          = "nginx-config-gen.handler"
+  runtime          = "python3.12"
+  role             = aws_iam_role.nginx_config_gen.arn
+  filename         = data.archive_file.nginx_config_gen.output_path
+  source_code_hash = data.archive_file.nginx_config_gen.output_base64sha256
+  timeout          = 30
+  memory_size      = 256
+
+  environment {
+    variables = {
+      ROUTING_TABLE     = aws_dynamodb_table.routing.table_name
+      CONFIG_BUCKET     = aws_s3_bucket.nginx_config.id
+      CONFIG_KEY        = "nginx/nginx.conf"
+      DEV_DOMAIN        = "${var.dev_subdomain}.${var.domain_name}"
+      CLOUDFRONT_SECRET = var.cloudfront_secret_value
+    }
+  }
+}
+
+resource "aws_lambda_event_source_mapping" "routing_stream" {
+  event_source_arn       = aws_dynamodb_table.routing.stream_arn
+  function_name          = aws_lambda_function.nginx_config_gen.arn
+  starting_position      = "TRIM_HORIZON"
+  batch_size             = 10
+  maximum_retry_attempts = 3
+}
+
+# ---- Nginx Security Group ---------------------------------------------------
+resource "aws_security_group" "nginx" {
+  name_prefix = "cc-nginx-"
+  description = "Nginx router SG"
   vpc_id      = var.vpc_id
 
-  # CloudFront managed prefix list for ap-northeast-2
   ingress {
-    description     = "Allow CloudFront"
-    from_port       = 443
-    to_port         = 443
-    protocol        = "tcp"
-    prefix_list_ids = ["pl-22a6434b"]
+    description = "Allow NLB traffic (Nginx validates X-Custom-Secret)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -375,49 +472,151 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = { Name = "cc-devenv-alb-sg" }
+  tags = { Name = "cc-nginx-sg" }
 }
 
-resource "aws_lb" "this" {
-  name               = "cc-devenv-alb"
+# Allow Nginx → DevEnv containers on port 8080
+resource "aws_security_group_rule" "devenv_from_nginx_open" {
+  type                     = "ingress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.nginx.id
+  security_group_id        = aws_security_group.dlp_open.id
+  description              = "Allow from Nginx router"
+}
+
+resource "aws_security_group_rule" "devenv_from_nginx_restricted" {
+  type                     = "ingress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.nginx.id
+  security_group_id        = aws_security_group.dlp_restricted.id
+  description              = "Allow from Nginx router"
+}
+
+resource "aws_security_group_rule" "devenv_from_nginx_locked" {
+  type                     = "ingress"
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.nginx.id
+  security_group_id        = aws_security_group.dlp_locked.id
+  description              = "Allow from Nginx router"
+}
+
+# ---- Nginx ECS Task Definition -----------------------------------------------
+resource "aws_ecs_task_definition" "nginx" {
+  family             = "cc-nginx-router"
+  network_mode       = "awsvpc"
+  execution_role_arn = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([{
+    name      = "nginx"
+    image     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${data.aws_region.current.name}.amazonaws.com/cc-on-bedrock/nginx:latest"
+    cpu       = 512
+    memory    = 1024
+    essential = true
+
+    portMappings = [{ containerPort = 80 }]
+
+    environment = [
+      { name = "CONFIG_BUCKET", value = aws_s3_bucket.nginx_config.id },
+      { name = "CONFIG_KEY", value = "nginx/nginx.conf" },
+      { name = "RELOAD_INTERVAL", value = "5" },
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.devenv.name
+        "awslogs-region"        = data.aws_region.current.name
+        "awslogs-stream-prefix" = "nginx"
+      }
+    }
+  }])
+
+  tags = { Name = "cc-nginx-router" }
+}
+
+# ---- Nginx ECS Service -------------------------------------------------------
+resource "aws_ecs_service" "nginx" {
+  name            = "cc-nginx-router"
+  cluster         = aws_ecs_cluster.this.id
+  task_definition = aws_ecs_task_definition.nginx.arn
+  desired_count   = 2
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [aws_security_group.nginx.id]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.nginx.arn
+    container_name   = "nginx"
+    container_port   = 80
+  }
+
+  deployment_minimum_healthy_percent = 50
+  deployment_maximum_percent         = 200
+
+  depends_on = [aws_lb_listener.nlb_http]
+}
+
+# ---- NLB (replaces ALB) -----------------------------------------------------
+resource "aws_lb" "nlb" {
+  name               = "cc-devenv-nlb"
   internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
+  load_balancer_type = "network"
   subnets            = var.public_subnet_ids
 
-  tags = { Name = "cc-devenv-alb" }
+  tags = { Name = "cc-devenv-nlb" }
 }
 
-resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.this.arn
-  port              = 443
-  protocol          = "HTTPS"
-  certificate_arn   = var.devenv_certificate_arn
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+resource "aws_lb_target_group" "nginx" {
+  name        = "cc-nginx-tg"
+  port        = 80
+  protocol    = "TCP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    protocol            = "HTTP"
+    path                = "/health"
+    interval            = 30
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+  }
+
+  tags = { Name = "cc-nginx-tg" }
+}
+
+resource "aws_lb_listener" "nlb_http" {
+  load_balancer_arn = aws_lb.nlb.arn
+  port              = 80
+  protocol          = "TCP"
 
   default_action {
-    type = "fixed-response"
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "Forbidden"
-      status_code  = "403"
-    }
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.nginx.arn
   }
 }
 
-# ---- CloudFront Distribution -------------------------------------------------
+# ---- CloudFront Distribution ------------------------------------------------
 resource "aws_cloudfront_distribution" "this" {
-  comment = "CC-on-Bedrock Dev Environment"
+  comment = "CC-on-Bedrock Dev Environment (NLB+Nginx)"
   enabled = true
 
   origin {
-    domain_name = aws_lb.this.dns_name
-    origin_id   = "devenv-alb"
+    domain_name = aws_lb.nlb.dns_name
+    origin_id   = "devenv-nlb"
 
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "https-only"
+      origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
 
@@ -428,14 +627,12 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   default_cache_behavior {
-    target_origin_id       = "devenv-alb"
+    target_origin_id       = "devenv-nlb"
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     cached_methods         = ["GET", "HEAD"]
 
-    # Disable caching (equivalent to CachePolicy.CACHING_DISABLED)
-    cache_policy_id = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
-    # ALL_VIEWER origin request policy
+    cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
     origin_request_policy_id = "216adef6-5c7f-47e4-b989-5492eafa07d3"
   }
 

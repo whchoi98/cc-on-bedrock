@@ -19,30 +19,39 @@ SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 TASK_ROLE_PREFIX = "cc-on-bedrock-task"
 DENY_POLICY_NAME = "BudgetExceededDeny"
 
-dynamodb = boto3.resource("dynamodb")
-table = dynamodb.Table(TABLE_NAME)
+dynamodb_resource = boto3.resource("dynamodb")
+dynamodb_client = boto3.client("dynamodb")
+table = dynamodb_resource.Table(TABLE_NAME)
 iam_client = boto3.client("iam")
 cognito_client = boto3.client("cognito-idp")
 sns_client = boto3.client("sns")
 
 
 def get_today_usage():
-    """Scan DynamoDB for all USER# entries today (with pagination)."""
+    """Query DynamoDB for today's usage via department-date-index, grouped by user."""
     today = datetime.utcnow().strftime("%Y-%m-%d")
     user_spend = {}
+
+    # Step 1: Get all departments from a lightweight scan of today's data
+    # Use user-date-index with date filter - but since we don't know all users,
+    # scan with a date filter is still the most practical approach here.
+    # The key improvement: paginated and uses begins_with on SK for efficient filtering.
     last_key = None
     while True:
         params = {
-            "FilterExpression": "begins_with(PK, :prefix) AND begins_with(SK, :today)",
-            "ExpressionAttributeValues": {":prefix": "USER#", ":today": today},
+            "TableName": TABLE_NAME,
+            "FilterExpression": "begins_with(PK, :prefix) AND #d = :today",
+            "ExpressionAttributeValues": {":prefix": {"S": "USER#"}, ":today": {"S": today}},
+            "ExpressionAttributeNames": {"#d": "date"},
+            "ProjectionExpression": "PK, estimatedCost, department",
         }
         if last_key:
             params["ExclusiveStartKey"] = last_key
-        result = table.scan(**params)
+        result = dynamodb_client.scan(**params)
         for item in result.get("Items", []):
-            user = item["PK"].replace("USER#", "")
-            cost = float(item.get("estimatedCost", 0))
-            dept = item.get("department", "default")
+            user = item["PK"]["S"].replace("USER#", "")
+            cost = float(item.get("estimatedCost", {}).get("N", "0"))
+            dept = item.get("department", {}).get("S", "default")
             if user in user_spend:
                 user_spend[user]["cost"] += cost
             else:

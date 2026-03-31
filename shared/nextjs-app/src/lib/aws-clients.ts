@@ -16,12 +16,19 @@ import {
   StopTaskCommand,
   DescribeTasksCommand,
   ListTasksCommand,
+  RegisterTaskDefinitionCommand,
+  DescribeTaskDefinitionCommand,
 } from "@aws-sdk/client-ecs";
 import {
   DynamoDBClient,
   PutItemCommand,
   DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
+import {
+  EFSClient,
+  CreateAccessPointCommand,
+  DescribeAccessPointsCommand,
+} from "@aws-sdk/client-efs";
 import type {
   CognitoUser,
   CreateUserInput,
@@ -49,8 +56,10 @@ const cognitoClient = new CognitoIdentityProviderClient({ region });
 const ecsClient = new ECSClient({ region });
 const dynamoClient = new DynamoDBClient({ region });
 const iamClient = new IAMClient({ region });
+const efsClient = new EFSClient({ region });
 
 const routingTableName = process.env.ROUTING_TABLE_NAME ?? "cc-routing-table";
+const efsFileSystemId = process.env.EFS_FILE_SYSTEM_ID ?? "";
 
 // ─── Helper: Parse Cognito attributes ───
 
@@ -304,6 +313,82 @@ async function ensureUserTaskRole(subdomain: string): Promise<string> {
   }
 }
 
+// ─── EFS Access Point per-user isolation ───
+
+async function ensureEfsAccessPoint(subdomain: string): Promise<string> {
+  if (!efsFileSystemId) {
+    throw new Error("EFS_FILE_SYSTEM_ID environment variable is required for per-user EFS isolation");
+  }
+
+  // Check for existing access point
+  const existing = await efsClient.send(new DescribeAccessPointsCommand({
+    FileSystemId: efsFileSystemId,
+  }));
+  const found = existing.AccessPoints?.find(
+    (ap) => ap.Tags?.some((t) => t.Key === "subdomain" && t.Value === subdomain)
+  );
+  if (found?.AccessPointId) {
+    return found.AccessPointId;
+  }
+
+  // Create new access point with per-user root directory
+  const result = await efsClient.send(new CreateAccessPointCommand({
+    FileSystemId: efsFileSystemId,
+    PosixUser: { Uid: 1000, Gid: 1000 },
+    RootDirectory: {
+      Path: `/users/${subdomain}`,
+      CreationInfo: { OwnerUid: 1000, OwnerGid: 1000, Permissions: "755" },
+    },
+    Tags: [
+      { Key: "Name", Value: `cc-devenv-${subdomain}` },
+      { Key: "subdomain", Value: subdomain },
+      { Key: "cc-on-bedrock", Value: "user-efs-ap" },
+    ],
+  }));
+  console.log(`[EFS] Created access point ${result.AccessPointId} for ${subdomain}`);
+  return result.AccessPointId!;
+}
+
+async function registerUserTaskDefinition(
+  baseFamily: string,
+  subdomain: string,
+  accessPointId: string,
+  userTaskRoleArn: string,
+): Promise<string> {
+  const userFamily = `devenv-user-${subdomain}`;
+
+  // Fetch the base task definition to clone its settings
+  const baseDef = await ecsClient.send(new DescribeTaskDefinitionCommand({
+    taskDefinition: baseFamily,
+  }));
+  const base = baseDef.taskDefinition;
+  if (!base) throw new Error(`Base task definition ${baseFamily} not found`);
+
+  // Register a new task definition with EFS access point
+  const result = await ecsClient.send(new RegisterTaskDefinitionCommand({
+    family: userFamily,
+    networkMode: base.networkMode,
+    taskRoleArn: userTaskRoleArn,
+    executionRoleArn: base.executionRoleArn,
+    containerDefinitions: base.containerDefinitions,
+    volumes: [{
+      name: "efs-workspace",
+      efsVolumeConfiguration: {
+        fileSystemId: efsFileSystemId,
+        transitEncryption: "ENABLED",
+        authorizationConfig: {
+          accessPointId,
+          iam: "ENABLED",
+        },
+      },
+    }],
+  }));
+
+  const family = result.taskDefinition?.taskDefinitionArn;
+  console.log(`[ECS] Registered user task def: ${family}`);
+  return family!;
+}
+
 const SECURITY_GROUP_MAP: Record<string, string> = {
   open: process.env.SG_DEVENV_OPEN ?? "",
   restricted: process.env.SG_DEVENV_RESTRICTED ?? "",
@@ -337,10 +422,19 @@ export async function startContainer(
   // Create or get per-user IAM Task Role for budget control
   const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
 
+  // Per-user EFS isolation: create access point + register user-specific task def
+  let effectiveTaskDef = taskDefinition;
+  if (efsFileSystemId) {
+    const accessPointId = await ensureEfsAccessPoint(input.subdomain);
+    effectiveTaskDef = await registerUserTaskDefinition(
+      taskDefinition, input.subdomain, accessPointId, userTaskRoleArn,
+    );
+  }
+
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
-      taskDefinition,
+      taskDefinition: effectiveTaskDef,
       count: 1,
       launchType: "EC2",
       enableExecuteCommand: true,
@@ -352,13 +446,11 @@ export async function startContainer(
         },
       },
       overrides: {
-        // Per-user Task Role for individual budget control
         taskRoleArn: userTaskRoleArn,
         containerOverrides: [
           {
             name: "devenv",
             environment: [
-              // Direct Bedrock mode: Claude Code uses Task Role via IMDS
               { name: "SECURITY_POLICY", value: input.securityPolicy },
               { name: "USER_SUBDOMAIN", value: input.subdomain },
               { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? crypto.randomUUID() },

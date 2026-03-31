@@ -16,9 +16,11 @@
 - `src/app/api/container-metrics/route.ts` - CloudWatch Container Insights 메트릭
 - `src/app/api/security/route.ts` - 보안 현황 조회
 - `src/app/api/health/route.ts` - 헬스체크
-- `src/app/api/litellm/route.ts` - LiteLLM API (레거시, DynamoDB 전환 예정)
+- `src/app/api/litellm/route.ts` - Usage Analytics API (DynamoDB 기반)
 - `src/app/api/users/route.ts` - Cognito 사용자 관리
 - `src/app/api/containers/route.ts` - ECS 컨테이너 관리
+- `src/app/api/slack/events/route.ts` - Slack Events API (app_mention, DM)
+- `src/app/api/slack/commands/route.ts` - Slack Slash Commands (/ask, /status)
 
 ## Components
 - `src/components/charts/` - Recharts 기반 차트 (token-usage, model-ratio, cost-trend, leaderboard, horizontal-bar, area-trend, multi-line, donut)
@@ -32,6 +34,7 @@
 - `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 클라이언트 (CloudTrail → EventBridge → Lambda → DynamoDB)
 - `src/lib/aws-clients.ts` - Cognito, ECS SDK 클라이언트
 - `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 클라이언트
+- `src/lib/slack-client.ts` - Slack 요청 검증, 메시지 전송, AI Runtime 호출
 - `src/lib/i18n.tsx` - 다국어(한/영) 지원
 - `src/lib/types.ts` - 공유 타입 정의
 - `src/middleware.ts` - 인증 + admin 라우트 보호

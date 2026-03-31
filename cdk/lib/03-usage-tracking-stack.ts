@@ -45,12 +45,44 @@ export class UsageTrackingStack extends cdk.Stack {
       timeToLiveAttribute: 'ttl',
     });
 
-    // GSI for department-level queries
+    // GSI for per-user date range queries (PK=USER#{id}, SK=date)
     this.usageTable.addGlobalSecondaryIndex({
-      indexName: 'dept-date-index',
+      indexName: 'user-date-index',
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'date', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI for department-level queries (PK=department, SK=date)
+    this.usageTable.addGlobalSecondaryIndex({
+      indexName: 'department-date-index',
+      partitionKey: { name: 'department', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'date', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // DynamoDB Table for approval requests (dept budget increase, etc.)
+    const approvalRequestsTable = new dynamodb.Table(this, 'ApprovalRequestsTable', {
+      tableName: 'cc-on-bedrock-approval-requests',
+      partitionKey: { name: 'requestId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    approvalRequestsTable.addGlobalSecondaryIndex({
+      indexName: 'status-index',
+      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'requestId', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // DynamoDB Table for department budgets
+    new dynamodb.Table(this, 'DeptBudgetsTable', {
+      tableName: 'cc-department-budgets',
+      partitionKey: { name: 'department', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
     // Lambda for processing CloudTrail events

@@ -5,6 +5,7 @@ import { getCognitoUser } from "@/lib/aws-clients";
 import {
   DynamoDBClient,
   ScanCommand,
+  QueryCommand,
   GetItemCommand,
   UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
@@ -45,9 +46,10 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await dynamodb.send(
-      new ScanCommand({
+      new QueryCommand({
         TableName: USER_VOLUMES_TABLE,
-        FilterExpression: "resizeStatus = :status",
+        IndexName: "resizeStatus-index",
+        KeyConditionExpression: "resizeStatus = :status",
         ExpressionAttributeValues: {
           ":status": { S: statusFilter },
         },
