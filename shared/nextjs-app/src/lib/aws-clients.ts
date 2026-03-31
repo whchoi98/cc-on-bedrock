@@ -74,17 +74,28 @@ const s3SyncBucket = process.env.S3_SYNC_BUCKET ?? "";
 const ecsInfrastructureRoleArn = process.env.ECS_INFRASTRUCTURE_ROLE_ARN ?? "";
 const kmsKeyArn = process.env.KMS_KEY_ARN ?? "";
 
-// Capacity provider name cache (EBS volumes require capacityProviderStrategy, not launchType)
-let _cachedCapacityProvider: string | undefined;
-async function getCapacityProviderName(): Promise<string | undefined> {
-  if (_cachedCapacityProvider) return _cachedCapacityProvider;
+// Capacity provider cache — per-AZ selection for EBS volume AZ affinity
+let _cachedCapacityProviders: string[] | undefined;
+async function getCapacityProviders(): Promise<string[]> {
+  if (_cachedCapacityProviders) return _cachedCapacityProviders;
   try {
     const result = await ecsClient.send(new DescribeClustersCommand({ clusters: [ecsCluster] }));
-    _cachedCapacityProvider = result.clusters?.[0]?.capacityProviders?.[0];
-    return _cachedCapacityProvider;
+    _cachedCapacityProviders = result.clusters?.[0]?.capacityProviders ?? [];
+    return _cachedCapacityProviders;
   } catch {
-    return undefined;
+    return [];
   }
+}
+
+async function getCapacityProviderForAz(userAz?: string): Promise<string | undefined> {
+  const cps = await getCapacityProviders();
+  if (cps.length === 0) return undefined;
+  if (!userAz) return cps[0]; // no AZ preference — use first available
+
+  // Match AZ suffix: "ap-northeast-2a" → "cc-cp-a"
+  const azSuffix = userAz.slice(-1);
+  const matched = cps.find(cp => cp.includes(`-${azSuffix}`));
+  return matched ?? cps[0]; // fallback to first if no match
 }
 
 const MAX_COGNITO_PAGES = 20;
@@ -592,6 +603,7 @@ export async function startContainer(
   // EBS mode: look up snapshot for data restoration
   let ebsSnapshotId: string | undefined;
   let ebsSizeGiB = 20;
+  let userAz: string | undefined;
   if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
     try {
       const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
@@ -603,12 +615,13 @@ export async function startContainer(
       ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
       const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
       if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
-      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB`);
+      userAz = volResult.Item?.az?.S;
+      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB, az: ${userAz}`);
     } catch { /* no snapshot — new volume */ }
   }
 
-  // EBS volumes require capacityProviderStrategy (launchType: "EC2" doesn't support managed EBS)
-  const capacityProvider = await getCapacityProviderName();
+  // AZ-aware capacity provider selection (EKS Karpenter-style)
+  const capacityProvider = await getCapacityProviderForAz(userAz);
 
   const result = await ecsClient.send(
     new RunTaskCommand({
@@ -816,6 +829,7 @@ export async function startContainerWithProgress(
   // EBS mode: look up snapshot for data restoration
   let ebsSnapshotId: string | undefined;
   let ebsSizeGiB = 20;
+  let userAz: string | undefined;
   if (input.storageType === "ebs" && ecsInfrastructureRoleArn) {
     try {
       const { DynamoDBClient, GetItemCommand: DDBGetItem } = await import("@aws-sdk/client-dynamodb");
@@ -827,12 +841,13 @@ export async function startContainerWithProgress(
       ebsSnapshotId = volResult.Item?.snapshot_id?.S ?? volResult.Item?.snapshotId?.S;
       const sizeStr = volResult.Item?.currentSizeGb?.N ?? volResult.Item?.size_gb?.N;
       if (sizeStr) ebsSizeGiB = parseInt(sizeStr, 10) || 20;
-      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB`);
+      userAz = volResult.Item?.az?.S;
+      if (ebsSnapshotId) console.log(`[EBS] Restoring from snapshot: ${ebsSnapshotId}, size: ${ebsSizeGiB}GB, az: ${userAz}`);
     } catch { /* no snapshot — new volume */ }
   }
 
-  // EBS volumes require capacityProviderStrategy (launchType: "EC2" doesn't support managed EBS)
-  const capacityProvider = await getCapacityProviderName();
+  // AZ-aware capacity provider selection (EKS Karpenter-style)
+  const capacityProvider = await getCapacityProviderForAz(userAz);
 
   const result = await ecsClient.send(
     new RunTaskCommand({
