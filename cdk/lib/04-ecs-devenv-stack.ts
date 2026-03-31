@@ -18,6 +18,8 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 
@@ -425,6 +427,38 @@ export class EcsDevenvStack extends cdk.Stack {
         certificate: acm.Certificate.fromCertificateArn(this, 'DevEnvCfCert', devEnvCfCertArn),
       } : {}),
       comment: 'CC-on-Bedrock Dev Environment (NLB+Nginx)',
+    });
+
+    // ─── Idle Check Lambda (5-min schedule) ───
+
+    const idleCheckLambda = new lambda.Function(this, 'IdleCheck', {
+      functionName: 'cc-idle-check',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'idle-check.handler',
+      code: lambda.Code.fromAsset('lib/lambda'),
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 256,
+      environment: {
+        REGION: cdk.Aws.REGION,
+        ECS_CLUSTER: config.ecsClusterName,
+        IDLE_CPU_THRESHOLD: '5.0',
+        IDLE_NETWORK_THRESHOLD: '1000',
+      },
+    });
+
+    idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ecs:ListTasks', 'ecs:DescribeTasks'],
+      resources: ['*'],
+    }));
+    idleCheckLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:GetMetricStatistics'],
+      resources: ['*'],
+    }));
+
+    new events.Rule(this, 'IdleCheckSchedule', {
+      ruleName: 'cc-idle-check-5min',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+      targets: [new targets.LambdaFunction(idleCheckLambda)],
     });
 
     // ─── Route 53 Wildcard Record ───

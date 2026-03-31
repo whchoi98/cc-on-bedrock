@@ -228,14 +228,14 @@ export default function StorageTab({ user, container }: StorageTabProps) {
                     ? "bg-green-900/50 text-green-400"
                     : "bg-red-900/50 text-red-400"
                 }`}>
-                  {resizeData.resizeRequest.status.replace("_", " ")}
+                  {String(resizeData.resizeRequest.status ?? "").replace("_", " ")}
                 </span>
               </div>
               <p className="text-xs text-gray-400">
-                Requested: {resizeData.resizeRequest.requestedSizeGb} GB — {resizeData.resizeRequest.reason}
+                Requested: {String(resizeData.resizeRequest.requestedSizeGb ?? "")} GB — {String(resizeData.resizeRequest.reason ?? "")}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Submitted: {new Date(resizeData.resizeRequest.requestedAt).toLocaleString()}
+                Submitted: {resizeData.resizeRequest.requestedAt ? new Date(String(resizeData.resizeRequest.requestedAt)).toLocaleString() : "-"}
               </p>
               {resizeData.resizeRequest.status === "resize_pending" && (
                 <button
