@@ -18,6 +18,7 @@ import {
   ListTasksCommand,
   RegisterTaskDefinitionCommand,
   DescribeTaskDefinitionCommand,
+  DescribeClustersCommand,
 } from "@aws-sdk/client-ecs";
 import {
   EFSClient,
@@ -72,6 +73,19 @@ const lambdaClient = new LambdaClient({ region });
 const s3SyncBucket = process.env.S3_SYNC_BUCKET ?? "";
 const ecsInfrastructureRoleArn = process.env.ECS_INFRASTRUCTURE_ROLE_ARN ?? "";
 const kmsKeyArn = process.env.KMS_KEY_ARN ?? "";
+
+// Capacity provider name cache (EBS volumes require capacityProviderStrategy, not launchType)
+let _cachedCapacityProvider: string | undefined;
+async function getCapacityProviderName(): Promise<string | undefined> {
+  if (_cachedCapacityProvider) return _cachedCapacityProvider;
+  try {
+    const result = await ecsClient.send(new DescribeClustersCommand({ clusters: [ecsCluster] }));
+    _cachedCapacityProvider = result.clusters?.[0]?.capacityProviders?.[0];
+    return _cachedCapacityProvider;
+  } catch {
+    return undefined;
+  }
+}
 
 const MAX_COGNITO_PAGES = 20;
 
@@ -590,12 +604,17 @@ export async function startContainer(
     } catch { /* no snapshot — new volume */ }
   }
 
+  // EBS volumes require capacityProviderStrategy (launchType: "EC2" doesn't support managed EBS)
+  const capacityProvider = await getCapacityProviderName();
+
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
       taskDefinition: finalTaskDefinition,
       count: 1,
-      launchType: "EC2",
+      ...(capacityProvider
+        ? { capacityProviderStrategy: [{ capacityProvider, weight: 1, base: 1 }] }
+        : { launchType: "EC2" as const }),
       enableExecuteCommand: true,
       networkConfiguration: {
         awsvpcConfiguration: {
@@ -790,12 +809,17 @@ export async function startContainerWithProgress(
 
   // Step 5: Container Start
   onProgress(5, "container_start", "in_progress", "Starting ECS task...");
+  // EBS volumes require capacityProviderStrategy (launchType: "EC2" doesn't support managed EBS)
+  const capacityProvider = await getCapacityProviderName();
+
   const result = await ecsClient.send(
     new RunTaskCommand({
       cluster: ecsCluster,
       taskDefinition: finalTaskDefinition,
       count: 1,
-      launchType: "EC2",
+      ...(capacityProvider
+        ? { capacityProviderStrategy: [{ capacityProvider, weight: 1, base: 1 }] }
+        : { launchType: "EC2" as const }),
       enableExecuteCommand: true,
       networkConfiguration: {
         awsvpcConfiguration: {

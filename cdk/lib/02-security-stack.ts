@@ -215,6 +215,8 @@ export class SecurityStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSInfrastructureRolePolicyForVolumes'),
       ],
     });
+    // Grant KMS access for encrypted EBS volume creation
+    this.encryptionKey.grantEncryptDecrypt(this.ecsInfrastructureRole);
 
     // Dashboard EC2 Role
     this.dashboardEc2Role = new iam.Role(this, 'DashboardEc2Role', {
@@ -323,7 +325,7 @@ export class SecurityStack extends cdk.Stack {
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'EcsTaskDefRegistration',
-      actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition'],
+      actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition', 'ecs:DescribeClusters'],
       resources: ['*'],
     }));
 

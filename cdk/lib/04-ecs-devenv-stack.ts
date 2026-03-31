@@ -317,10 +317,9 @@ export class EcsDevenvStack extends cdk.Stack {
             name: 'user-data',
             configuredAtLaunch: true,
           });
-          // EBS mode: user-data (EBS) → /home/coder, EFS → /efs (shared tools)
+          // EBS mode: user-data (EBS) → /home/coder only (no EFS mount for simplicity)
           container.addMountPoints(
             { sourceVolume: 'user-data', containerPath: '/home/coder', readOnly: false },
-            { sourceVolume: 'efs-workspace', containerPath: '/efs', readOnly: false },
           );
         } else {
           // EFS mode: EFS → /home/coder (primary), no EBS volume
@@ -445,10 +444,10 @@ export class EcsDevenvStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
     });
     nginxTaskRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['s3:GetObject', 's3:ListBucket'],
+      actions: ['s3:GetObject', 's3:ListBucket', 's3:HeadObject'],
       resources: [
-        `arn:aws:s3:::${config.projectPrefix}-nginx-config-${cdk.Aws.ACCOUNT_ID}`,
-        `arn:aws:s3:::${config.projectPrefix}-nginx-config-${cdk.Aws.ACCOUNT_ID}/*`,
+        userDataBucket.bucketArn,
+        `${userDataBucket.bucketArn}/*`,
       ],
     }));
 
@@ -470,10 +469,11 @@ export class EcsDevenvStack extends cdk.Stack {
       cpu: 2048,
       essential: true,
       environment: {
-        S3_BUCKET: userDataBucket.bucketName,
-        S3_CONFIG_KEY: 'nginx/nginx.conf',
+        CONFIG_BUCKET: userDataBucket.bucketName,
+        CONFIG_KEY: 'nginx/nginx.conf',
         RELOAD_INTERVAL: '5',
         AWS_DEFAULT_REGION: cdk.Aws.REGION,
+        AWS_REGION: cdk.Aws.REGION,
       },
       logging: ecs.LogDrivers.awsLogs({
         logGroup: new logs.LogGroup(this, 'NginxLogGroup', {
