@@ -311,20 +311,19 @@ export class EcsDevenvStack extends cdk.Stack {
           },
         });
 
-        // EBS Volume — user data (configuredAtLaunch, attached via RunTask volumeConfigurations)
-        taskDef.addVolume({
-          name: 'user-data',
-          configuredAtLaunch: true,
-        });
-
         if (isEbsMode(config)) {
+          // EBS Volume — user data (configuredAtLaunch, attached via RunTask volumeConfigurations)
+          taskDef.addVolume({
+            name: 'user-data',
+            configuredAtLaunch: true,
+          });
           // EBS mode: user-data (EBS) → /home/coder, EFS → /efs (shared tools)
           container.addMountPoints(
             { sourceVolume: 'user-data', containerPath: '/home/coder', readOnly: false },
             { sourceVolume: 'efs-workspace', containerPath: '/efs', readOnly: false },
           );
         } else {
-          // EFS mode: EFS → /home/coder (primary), user-data volume declared but unused
+          // EFS mode: EFS → /home/coder (primary), no EBS volume
           container.addMountPoints({
             sourceVolume: 'efs-workspace',
             containerPath: '/home/coder',
