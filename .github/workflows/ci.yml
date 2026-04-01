@@ -18,7 +18,7 @@ on:
 jobs:
   nextjs-validate:
     name: Next.js — TypeScript + Build + Test
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-x86
     defaults:
       run:
         working-directory: shared/nextjs-app
@@ -37,7 +37,7 @@ jobs:
 
   cdk-validate:
     name: CDK — TypeScript + Synth
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-x86
     defaults:
       run:
         working-directory: cdk
@@ -57,7 +57,7 @@ jobs:
 
   terraform-validate:
     name: Terraform — Validate + Format
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-x86
     defaults:
       run:
         working-directory: terraform
