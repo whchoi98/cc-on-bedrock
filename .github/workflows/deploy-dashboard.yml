@@ -14,9 +14,13 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: read
+  id-token: write
+
 env:
   AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: cc-on-bedrock/dashboard
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com
 
 jobs:
   build-and-push:
@@ -24,37 +28,18 @@ jobs:
     runs-on: cc-bedrock-arm
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set image tag
-        id: tag
-        env:
-          INPUT_TAG: ${{ github.event.inputs.image_tag }}
-          GIT_SHA: ${{ github.sha }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push
         run: |
-          TAG="${INPUT_TAG:-$GIT_SHA}"
-          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push Docker image
-        env:
-          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
-        run: |
-          docker build \
-            --platform linux/arm64 \
-            -f docker/dashboard/Dockerfile \
-            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
-            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
-            .
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          docker build --platform linux/arm64 \
+            -t "$ECR_REGISTRY/cc-on-bedrock/dashboard:${{ github.sha }}" \
+            -f docker/dashboard/Dockerfile .
+          docker push "$ECR_REGISTRY/cc-on-bedrock/dashboard:${{ github.sha }}"
+          docker tag "$ECR_REGISTRY/cc-on-bedrock/dashboard:${{ github.sha }}" \
+            "$ECR_REGISTRY/cc-on-bedrock/dashboard:latest"
+          docker push "$ECR_REGISTRY/cc-on-bedrock/dashboard:latest"

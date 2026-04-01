@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
   pull-requests: write
 
 env:
@@ -14,26 +15,25 @@ env:
 jobs:
   review:
     name: AI Code Review
-    runs-on: [self-hosted, linux, ARM64]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/setup-node@v4
         with:
+          node-version: '20'
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install Claude Code
-        run: |
-          if ! command -v claude &>/dev/null; then
-            npm install -g @anthropic-ai/claude-code
-          fi
-          claude --version
+        run: npm install -g @anthropic-ai/claude-code
 
       - name: Generate PR diff
         env:
