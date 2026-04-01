@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-and-deploy:
-    runs-on: self-hosted-x86
+    runs-on: cc-bedrock-x86
     defaults:
       run:
         working-directory: webpage
