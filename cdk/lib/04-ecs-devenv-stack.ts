@@ -332,6 +332,13 @@ export class EcsDevenvStack extends cdk.Stack {
             SECURITY_POLICY: 'open',  // Overridden at RunTask time
           },
           portMappings: [{ containerPort: 8080 }],
+          healthCheck: {
+            command: ['CMD-SHELL', 'curl -f http://localhost:8080/healthz || exit 1'],
+            interval: cdk.Duration.seconds(30),
+            timeout: cdk.Duration.seconds(5),
+            startPeriod: cdk.Duration.seconds(60),
+            retries: 3,
+          },
           linuxParameters: new ecs.LinuxParameters(this, `LinuxParams-${os}-${tier.name}`, {
             initProcessEnabled: true,  // Required for ECS Exec
           }),
