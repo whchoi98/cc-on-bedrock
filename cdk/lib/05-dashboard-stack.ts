@@ -169,8 +169,8 @@ export class DashboardStack extends cdk.Stack {
       executionRole: taskExecutionRole,
     });
 
-    const nextAuthSecret = secretsmanager.Secret.fromSecretNameV2(
-      this, 'NextAuthSecret', 'cc-on-bedrock/nextauth-secret');
+    const nextAuthSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'NextAuthSecret',
+      `arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/nextauth-secret-zk4Tnm`);
 
     taskDef.addContainer('dashboard', {
       image: ecs.ContainerImage.fromEcrRepository(dashboardRepo, 'latest'),
