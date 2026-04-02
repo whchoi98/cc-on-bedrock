@@ -215,6 +215,13 @@ export class DashboardStack extends cdk.Stack {
         ),
       },
       portMappings: [{ containerPort: 3000 }],
+      healthCheck: {
+        command: ['CMD-SHELL', 'node -e "fetch(\'http://localhost:3000/api/health\').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+        startPeriod: cdk.Duration.seconds(30),
+        retries: 3,
+      },
     });
 
     // ─── ECS Service (runs on cc-cp-dashboard Capacity Provider) ───
