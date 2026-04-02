@@ -73,7 +73,7 @@ jobs:
     name: Deploy to ECS
     needs: build-and-push
     if: ${{ !inputs.skip_deploy }}
-    runs-on: ubuntu-latest
+    runs-on: cc-bedrock-arm
 
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
