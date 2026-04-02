@@ -208,12 +208,15 @@ export class UsageTrackingStack extends cdk.Stack {
         IDLE_THRESHOLD_MINUTES: '30',
         SNS_TOPIC_ARN: alertTopic.topicArn,
         EBS_LIFECYCLE_LAMBDA: 'cc-on-bedrock-ebs-lifecycle',
+        USAGE_TABLE: this.usageTable.tableName,
+        EOD_SHUTDOWN_ENABLED: 'true',
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
     });
 
     // Grant warm-stop Lambda permissions
     userVolumesTable.grantReadWriteData(warmStopLambda);
+    this.usageTable.grantReadData(warmStopLambda);
     alertTopic.grantPublish(warmStopLambda);
 
     // ECS permissions: list, describe, stop tasks

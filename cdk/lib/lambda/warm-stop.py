@@ -30,6 +30,8 @@ ROUTING_TABLE = os.environ.get("ROUTING_TABLE", "cc-routing-table")
 IDLE_THRESHOLD_MINUTES = int(os.environ.get("IDLE_THRESHOLD_MINUTES", "30"))
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 EBS_LIFECYCLE_LAMBDA = os.environ.get("EBS_LIFECYCLE_LAMBDA", "cc-on-bedrock-ebs-lifecycle")
+USAGE_TABLE = os.environ.get("USAGE_TABLE", "cc-on-bedrock-usage")
+EOD_SHUTDOWN_ENABLED = os.environ.get("EOD_SHUTDOWN_ENABLED", "true")
 
 # AWS clients
 ecs = boto3.client("ecs", region_name=REGION)
@@ -42,8 +44,9 @@ lambda_client = boto3.client("lambda", region_name=REGION)
 # DynamoDB table
 table = dynamodb.Table(VOLUMES_TABLE)
 
-# Idle CPU threshold (percentage)
-IDLE_CPU_THRESHOLD = 5.0
+# Idle thresholds
+IDLE_CPU_THRESHOLD = 5.0  # percentage
+IDLE_NETWORK_THRESHOLD = 1000  # bytes/sec (RX+TX combined)
 
 
 def handler(event: dict, context: Any) -> dict:
@@ -290,8 +293,13 @@ def warm_resume(event: dict) -> dict:
 def schedule_shutdown(event: dict) -> dict:
     """
     Batch stop all idle containers at EOD (called at 18:00 KST).
-    Excludes tasks with 'no_auto_stop' tag.
+    Excludes tasks with 'no_auto_stop' tag or active keep-alive.
+    Can be disabled globally via EOD_SHUTDOWN_ENABLED env var.
     """
+    if EOD_SHUTDOWN_ENABLED.lower() != "true":
+        logger.info("EOD shutdown is disabled via EOD_SHUTDOWN_ENABLED")
+        return success_response({"message": "EOD shutdown is disabled"})
+
     logger.info("Scheduled shutdown: stopping all idle containers")
 
     running_tasks = list_running_tasks()
@@ -319,6 +327,23 @@ def schedule_shutdown(event: dict) -> dict:
                 "reason": "no_auto_stop tag",
             })
             continue
+
+        # Check keep_alive_until — skip if user extended
+        try:
+            vol_result = table.get_item(Key={"user_id": user_id})
+            keep_alive_until = vol_result.get("Item", {}).get("keep_alive_until", "")
+            if keep_alive_until:
+                ka_time = datetime.fromisoformat(keep_alive_until.replace("Z", "+00:00"))
+                if ka_time > datetime.now(timezone.utc):
+                    logger.info(f"Skipping task {task_id} (user: {user_id}) - keep-alive until {keep_alive_until}")
+                    skipped_tasks.append({
+                        "task_arn": task_arn,
+                        "user_id": user_id,
+                        "reason": "keep_alive_active",
+                    })
+                    continue
+        except Exception as e:
+            logger.warning(f"Failed to check keep_alive for {user_id}: {e}")
 
         # Check if task is actively being used (high CPU in last 15 minutes)
         # Pass started_at to respect the 10-minute startup grace period
@@ -410,9 +435,52 @@ def get_task_info(task_arn: str) -> dict | None:
         return None
 
 
+def get_network_metrics(task_def_family: str, start_time: datetime, end_time: datetime) -> float:
+    """Get average network throughput (bytes/sec) from Container Insights."""
+    try:
+        dims = [
+            {"Name": "ClusterName", "Value": CLUSTER},
+            {"Name": "TaskDefinitionFamily", "Value": task_def_family},
+        ]
+        rx_resp = cloudwatch.get_metric_statistics(
+            Namespace="ECS/ContainerInsights", MetricName="NetworkRxBytes",
+            Dimensions=dims, StartTime=start_time, EndTime=end_time,
+            Period=300, Statistics=["Average"],
+        )
+        tx_resp = cloudwatch.get_metric_statistics(
+            Namespace="ECS/ContainerInsights", MetricName="NetworkTxBytes",
+            Dimensions=dims, StartTime=start_time, EndTime=end_time,
+            Period=300, Statistics=["Average"],
+        )
+        rx_dps = rx_resp.get("Datapoints", [])
+        tx_dps = tx_resp.get("Datapoints", [])
+        rx_avg = sum(dp["Average"] for dp in rx_dps) / len(rx_dps) if rx_dps else 0
+        tx_avg = sum(dp["Average"] for dp in tx_dps) / len(tx_dps) if tx_dps else 0
+        return (rx_avg + tx_avg) / 300  # bytes per 5-min period → bytes/sec
+    except ClientError as e:
+        logger.error(f"Failed to get network metrics: {e}")
+        return float("inf")  # Fail safe — don't mark as idle
+
+
+def has_recent_token_usage(user_id: str, minutes: int = 15) -> bool:
+    """Check if user has recent Bedrock API calls in the usage table."""
+    try:
+        usage_table = dynamodb.Table(USAGE_TABLE)
+        cutoff = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat() + "Z"
+        response = usage_table.query(
+            KeyConditionExpression="PK = :pk AND SK > :cutoff",
+            ExpressionAttributeValues={":pk": f"USER#{user_id}", ":cutoff": cutoff},
+            Limit=1,
+        )
+        return len(response.get("Items", [])) > 0
+    except ClientError as e:
+        logger.warning(f"Failed to check token usage for {user_id}: {e}")
+        return True  # Fail safe — assume active
+
+
 def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = None, started_at: datetime = None, task_def_family: str = "devenv-ubuntu-standard") -> tuple:
     """
-    Check if task is idle based on CloudWatch CPU metrics.
+    Check if task is idle based on CPU, network I/O, and token usage.
     Returns (is_idle: bool, idle_minutes: int).
     """
     if period_minutes is None:
@@ -449,6 +517,14 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
             custom_datapoints.sort(key=lambda x: x["Timestamp"])
             idle_count = sum(1 for dp in custom_datapoints if dp["Average"] < IDLE_CPU_THRESHOLD)
             if idle_count == len(custom_datapoints):
+                # CPU idle — also check network and token usage before confirming
+                network_avg = get_network_metrics(task_def_family, start_time, end_time)
+                if network_avg >= IDLE_NETWORK_THRESHOLD:
+                    logger.info(f"Task {task_id} CPU idle but network active ({network_avg:.0f} B/s)")
+                    return False, 0
+                if has_recent_token_usage(user_id):
+                    logger.info(f"Task {task_id} CPU idle but recent Bedrock API usage")
+                    return False, 0
                 idle_minutes = idle_count * 5
                 return True, idle_minutes
             return False, 0
@@ -482,6 +558,14 @@ def check_task_idle_status(task_id: str, user_id: str, period_minutes: int = Non
         total_count = len(datapoints)
 
         if idle_count == total_count:
+            # CPU idle — also check network and token usage
+            network_avg = get_network_metrics(task_def_family, start_time, end_time)
+            if network_avg >= IDLE_NETWORK_THRESHOLD:
+                logger.info(f"Task {task_id} CPU idle but network active ({network_avg:.0f} B/s)")
+                return False, 0
+            if has_recent_token_usage(user_id):
+                logger.info(f"Task {task_id} CPU idle but recent Bedrock API usage")
+                return False, 0
             idle_minutes = idle_count * 5  # Each datapoint is 5 minutes
             return True, idle_minutes
         else:

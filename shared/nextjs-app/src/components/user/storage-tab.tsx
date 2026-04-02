@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { UserSession, ContainerInfo, DiskUsage, EbsResizeData } from "@/lib/types";
 
 interface StorageTabProps {
@@ -138,6 +138,15 @@ export default function StorageTab({ user, container }: StorageTabProps) {
     }
   };
 
+  const [autoKeepAlive, setAutoKeepAlive] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("cc-auto-keep-alive") === "true";
+    }
+    return false;
+  });
+  const autoKeepAliveRef = useRef(autoKeepAlive);
+  autoKeepAliveRef.current = autoKeepAlive;
+
   const handleKeepAlive = async () => {
     try {
       const res = await fetch("/api/user/keep-alive", { method: "POST" });
@@ -151,6 +160,19 @@ export default function StorageTab({ user, container }: StorageTabProps) {
       setError("Failed to extend keep-alive");
     }
   };
+
+  // Auto keep-alive: extend every 30 minutes when toggle is on
+  useEffect(() => {
+    if (!autoKeepAlive || !container || container.status === "STOPPED") return;
+    // Extend immediately on enable
+    fetch("/api/user/keep-alive", { method: "POST" }).catch(() => {});
+    const interval = setInterval(() => {
+      if (autoKeepAliveRef.current) {
+        fetch("/api/user/keep-alive", { method: "POST" }).catch(() => {});
+      }
+    }, 30 * 60 * 1000); // 30 minutes
+    return () => clearInterval(interval);
+  }, [autoKeepAlive, container]);
 
   const formatBytes = (bytes: number): string => {
     if (bytes === 0) return "0 B";
@@ -388,7 +410,7 @@ export default function StorageTab({ user, container }: StorageTabProps) {
 
       {/* Keep-Alive (EBS mode only) */}
       {isEbs && isRunning && (
-        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
+        <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-gray-100">Keep-Alive</h2>
@@ -401,6 +423,33 @@ export default function StorageTab({ user, container }: StorageTabProps) {
               className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
             >
               Extend 1 Hour
+            </button>
+          </div>
+          <div className="flex items-center justify-between border-t border-gray-800 pt-4">
+            <div>
+              <p className="text-sm font-medium text-gray-200">Auto Keep-Alive</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Automatically extend every 30 minutes while container is running.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                const next = !autoKeepAlive;
+                setAutoKeepAlive(next);
+                localStorage.setItem("cc-auto-keep-alive", String(next));
+                if (next) setSuccess("Auto keep-alive enabled");
+              }}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                autoKeepAlive ? "bg-green-600" : "bg-gray-600"
+              }`}
+              role="switch"
+              aria-checked={autoKeepAlive}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  autoKeepAlive ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
             </button>
           </div>
         </div>
