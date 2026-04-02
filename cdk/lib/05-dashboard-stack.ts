@@ -3,7 +3,6 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as route53 from 'aws-cdk-lib/aws-route53';
@@ -22,7 +21,6 @@ export interface DashboardStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
-  dashboardEc2Role: iam.Role;
   dashboardCertificateArn?: string;
   cloudfrontCertificateArn?: string;
   hostedZone?: route53.IHostedZone;
@@ -39,7 +37,7 @@ export class DashboardStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DashboardStackProps) {
     super(scope, id, props);
 
-    const { config, vpc, encryptionKey, dashboardEc2Role,
+    const { config, vpc, encryptionKey,
             dashboardCertificateArn, cloudfrontCertificateArn,
             userPool, webAclArn } = props;
 
@@ -51,16 +49,22 @@ export class DashboardStack extends cdk.Stack {
         })
       : props.hostedZone!;
 
-    // ─── Dashboard Role Permissions (shared by ECS Task + Troubleshooting EC2) ───
+    // ─── Dashboard Role (import directly — avoids cross-stack export dependency on Security stack) ───
+    const dashboardEc2Role = iam.Role.fromRoleName(this, 'ImportedDashboardRole', 'cc-on-bedrock-dashboard-ec2');
+
+    // ─── Dashboard Role Permissions ───
 
     // SSM Parameter Store - read Cognito credentials
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+    const dashboardPolicy = new iam.Policy(this, 'DashboardExtraPolicy', {
+      roles: [dashboardEc2Role],
+    });
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'SsmParameterRead',
       actions: ['ssm:GetParameter', 'ssm:GetParameters'],
       resources: [`arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/*`],
     }));
 
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'BedrockAccess',
       actions: [
         'bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream',
@@ -72,7 +76,7 @@ export class DashboardStack extends cdk.Stack {
       ],
     }));
 
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'AgentCoreAccess',
       actions: [
         'bedrock-agentcore:InvokeAgentRuntime',
@@ -84,13 +88,13 @@ export class DashboardStack extends cdk.Stack {
       resources: ['*'],
     }));
 
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'CloudWatchAccess',
       actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics', 'cloudwatch:GetMetricStatistics'],
       resources: ['*'],
     }));
 
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'SecurityDashboard',
       actions: [
         'cloudtrail:LookupEvents',
@@ -170,8 +174,8 @@ export class DashboardStack extends cdk.Stack {
 
     taskDef.addContainer('dashboard', {
       image: ecs.ContainerImage.fromEcrRepository(dashboardRepo, 'latest'),
-      cpu: 1024,
-      memoryLimitMiB: 2048,
+      cpu: 4096,
+      memoryLimitMiB: 15360,
       essential: true,
       logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: 'dashboard' }),
       environment: {
@@ -221,7 +225,10 @@ export class DashboardStack extends cdk.Stack {
       desiredCount: 1,
       minHealthyPercent: 0,
       maxHealthyPercent: 200,
-      capacityProviderStrategies: [{ capacityProvider: 'cc-cp-dashboard', weight: 1 }],
+      capacityProviderStrategies: [
+        { capacityProvider: 'cc-cp-a', weight: 1 },
+        { capacityProvider: 'cc-cp-b', weight: 1 },
+      ],
       securityGroups: [taskSg],
       enableExecuteCommand: true,
     });
@@ -284,47 +291,6 @@ export class DashboardStack extends cdk.Stack {
       zone: hostedZone,
       recordName: config.dashboardSubdomain,
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
-    });
-
-    // ─── Troubleshooting EC2 (m6g.large, ASG min 0 — SSM access only) ───
-    const troubleshootSg = new ec2.SecurityGroup(this, 'TroubleshootEc2Sg', {
-      vpc, description: 'Troubleshooting EC2 - SSM only', allowAllOutbound: true,
-    });
-
-    const troubleshootLt = new ec2.LaunchTemplate(this, 'TroubleshootLaunchTemplate', {
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.M6G, ec2.InstanceSize.LARGE),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-      role: dashboardEc2Role,
-      securityGroup: troubleshootSg,
-      blockDevices: [{
-        deviceName: '/dev/xvda',
-        volume: ec2.BlockDeviceVolume.ebs(30, {
-          volumeType: ec2.EbsDeviceVolumeType.GP3,
-          encrypted: true,
-        }),
-      }],
-      userData: ec2.UserData.custom([
-        '#!/bin/bash',
-        'set -euo pipefail',
-        '',
-        '# Install Node.js 20',
-        'ARCH=$(uname -m)',
-        'if [ "$ARCH" = "aarch64" ]; then NODE_ARCH="arm64"; else NODE_ARCH="x64"; fi',
-        `curl -fsSL "https://nodejs.org/dist/${config.nodeVersion}/node-${config.nodeVersion}-linux-\${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz`,
-        'tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1',
-        'rm /tmp/node.tar.gz',
-        '',
-        '# Install Claude Code CLI',
-        'npm install -g @anthropic-ai/claude-code',
-      ].join('\n')),
-    });
-
-    new autoscaling.AutoScalingGroup(this, 'TroubleshootAsg', {
-      vpc,
-      launchTemplate: troubleshootLt,
-      minCapacity: 0,
-      maxCapacity: 1,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
     });
 
     // ─── Outputs ───

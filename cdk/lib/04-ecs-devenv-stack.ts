@@ -290,46 +290,6 @@ export class EcsDevenvStack extends cdk.Stack {
       exportName: 'cc-availability-zones',
     });
 
-    // ─── Dashboard Capacity Provider (dedicated ASG for dashboard ECS service) ───
-    const dashboardLaunchTemplate = new ec2.LaunchTemplate(this, 'DashboardCapacityLaunchTemplate', {
-      instanceType: new ec2.InstanceType(config.dashboardInstanceType),
-      machineImage: ecs.EcsOptimizedImage.amazonLinux2023(ecs.AmiHardwareType.ARM),
-      role: ecsInstanceRole,
-      securityGroup: sgOpen,
-      requireImdsv2: true,
-      blockDevices: [{
-        deviceName: '/dev/xvda',
-        volume: ec2.BlockDeviceVolume.ebs(30, {
-          volumeType: ec2.EbsDeviceVolumeType.GP3,
-          encrypted: true,
-        }),
-      }],
-      userData: ec2.UserData.forLinux(),
-    });
-    dashboardLaunchTemplate.userData!.addCommands(
-      `echo ECS_CLUSTER=${this.cluster.clusterName} >> /etc/ecs/ecs.config`,
-      'echo ECS_ENABLE_TASK_ENI=true >> /etc/ecs/ecs.config',
-      'echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config',
-    );
-
-    const dashboardAsg = new autoscaling.AutoScalingGroup(this, 'DashboardAsg', {
-      vpc,
-      launchTemplate: dashboardLaunchTemplate,
-      minCapacity: 1,
-      maxCapacity: 2,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      newInstancesProtectedFromScaleIn: false,
-    });
-
-    const dashboardCp = new ecs.AsgCapacityProvider(this, 'DashboardCp', {
-      capacityProviderName: 'cc-cp-dashboard',
-      autoScalingGroup: dashboardAsg,
-      enableManagedScaling: true,
-      enableManagedTerminationProtection: true,
-      targetCapacityPercent: 100,
-    });
-    this.cluster.addAsgCapacityProvider(dashboardCp);
-
     // Log Group
     const logGroup = new logs.LogGroup(this, 'DevenvLogGroup', {
       logGroupName: '/cc-on-bedrock/ecs/devenv',

@@ -30,7 +30,6 @@ const config = {
   sonnetModelId: app.node.tryGetContext('sonnetModelId') ?? defaultConfig.sonnetModelId,
   ecsHostInstanceType: app.node.tryGetContext('ecsHostInstanceType') ?? defaultConfig.ecsHostInstanceType,
   ecsClusterName: app.node.tryGetContext('ecsClusterName') ?? defaultConfig.ecsClusterName,
-  dashboardInstanceType: app.node.tryGetContext('dashboardInstanceType') ?? defaultConfig.dashboardInstanceType,
   nodeVersion: app.node.tryGetContext('nodeVersion') ?? defaultConfig.nodeVersion,
   dailyBudgetUsd: Number(app.node.tryGetContext('dailyBudgetUsd')) || defaultConfig.dailyBudgetUsd,
   storageType: (app.node.tryGetContext('storageType') as 'efs' | 'ebs') ?? defaultConfig.storageType,
@@ -96,7 +95,6 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   env, config, crossRegionReferences: true,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
-  dashboardEc2Role: securityStack.dashboardEc2Role,
   dashboardCertificateArn: app.node.tryGetContext('dashboardCertArn'),
   cloudfrontCertificateArn: app.node.tryGetContext('cloudfrontCertArn'),
   // hostedZone imported directly from config to avoid cross-stack export dependency

@@ -1,4 +1,4 @@
-name: Build Dashboard Image → ECR
+name: Deploy Dashboard (ECR Build → ECS Deploy)
 
 on:
   push:
@@ -13,6 +13,10 @@ on:
         description: 'ECR image tag (default: git SHA + latest)'
         required: false
         default: ''
+      skip_deploy:
+        description: 'Skip ECS deploy (build only)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,25 +25,88 @@ permissions:
 env:
   AWS_REGION: ap-northeast-2
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPO: cc-on-bedrock/dashboard
+  ECS_CLUSTER: cc-on-bedrock-devenv
+  ECS_SERVICE: cc-dashboard
 
 jobs:
   build-and-push:
     name: Build → Push to ECR
     runs-on: cc-bedrock-arm
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
           aws-region: ${{ env.AWS_REGION }}
+
       - uses: aws-actions/amazon-ecr-login@v2
-      - name: Build and push
+
+      - name: Set image tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          GIT_SHA: ${{ github.sha }}
         run: |
+          TAG="${INPUT_TAG:-$GIT_SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          IMAGE="$ECR_REGISTRY/$ECR_REPO"
+
           docker build --platform linux/arm64 \
-            -t "$ECR_REGISTRY/cc-on-bedrock/dashboard:${{ github.sha }}" \
+            -t "$IMAGE:$IMAGE_TAG" \
             -f docker/dashboard/Dockerfile .
-          docker push "$ECR_REGISTRY/cc-on-bedrock/dashboard:${{ github.sha }}"
-          docker tag "$ECR_REGISTRY/cc-on-bedrock/dashboard:${{ github.sha }}" \
-            "$ECR_REGISTRY/cc-on-bedrock/dashboard:latest"
-          docker push "$ECR_REGISTRY/cc-on-bedrock/dashboard:latest"
+
+          docker push "$IMAGE:$IMAGE_TAG"
+          docker tag "$IMAGE:$IMAGE_TAG" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+
+  deploy:
+    name: Deploy to ECS
+    needs: build-and-push
+    if: ${{ !inputs.skip_deploy }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force new ECS deployment
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --query 'service.deployments[0].{status:status,running:runningCount,desired:desiredCount}' \
+            --output table
+
+      - name: Wait for service stability
+        run: |
+          echo "Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+          echo "Service is stable."
+
+      - name: Verify deployment
+        run: |
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].{
+              status:status,
+              desired:desiredCount,
+              running:runningCount,
+              deployments:deployments[*].{status:status,running:runningCount,desired:desiredCount,rollout:rolloutState}
+            }' \
+            --output table

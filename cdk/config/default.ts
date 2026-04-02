@@ -26,7 +26,6 @@ export interface CcOnBedrockConfig {
   // Compute
   ecsHostInstanceType: string;
   ecsClusterName: string;
-  dashboardInstanceType: string;
   nodeVersion: string;
 
   // Budget
@@ -75,7 +74,6 @@ export const defaultConfig: CcOnBedrockConfig = {
   sonnetModelId: 'global.anthropic.claude-sonnet-4-6[1m]',
   ecsHostInstanceType: 'm7g.4xlarge',
   ecsClusterName: 'cc-on-bedrock-devenv',
-  dashboardInstanceType: 't4g.large',
   nodeVersion: 'v20.18.3',
   dailyBudgetUsd: 50,
   storageType: 'ebs',
