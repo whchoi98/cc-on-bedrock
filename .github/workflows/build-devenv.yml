@@ -40,7 +40,7 @@ jobs:
 
           docker build --platform linux/arm64 \
             -t "$IMAGE:ubuntu-$GIT_SHA" \
-            -f docker/devenv/Dockerfile.ubuntu .
+            -f docker/devenv/Dockerfile.ubuntu docker/devenv
 
           docker push "$IMAGE:ubuntu-$GIT_SHA"
           docker tag "$IMAGE:ubuntu-$GIT_SHA" "$IMAGE:ubuntu-latest"
@@ -68,7 +68,7 @@ jobs:
 
           docker build --platform linux/arm64 \
             -t "$IMAGE:al2023-$GIT_SHA" \
-            -f docker/devenv/Dockerfile.al2023 .
+            -f docker/devenv/Dockerfile.al2023 docker/devenv
 
           docker push "$IMAGE:al2023-$GIT_SHA"
           docker tag "$IMAGE:al2023-$GIT_SHA" "$IMAGE:al2023-latest"
