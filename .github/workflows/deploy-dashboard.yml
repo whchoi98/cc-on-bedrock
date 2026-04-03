@@ -78,19 +78,22 @@ jobs:
           fi
           echo "Image tag: $(cat "$GITHUB_OUTPUT" | grep tag= | cut -d= -f2)"
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push
         env:
           IMAGE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           IMAGE="$ECR_REGISTRY/$ECR_REPO"
 
-          docker build --platform linux/arm64 \
+          docker buildx build --platform linux/arm64 \
             -t "$IMAGE:$IMAGE_TAG" \
-            -f docker/dashboard/Dockerfile .
-
-          docker push "$IMAGE:$IMAGE_TAG"
-          docker tag "$IMAGE:$IMAGE_TAG" "$IMAGE:latest"
-          docker push "$IMAGE:latest"
+            -t "$IMAGE:latest" \
+            -f docker/dashboard/Dockerfile \
+            --cache-from type=registry,ref=$IMAGE:cache \
+            --cache-to type=registry,ref=$IMAGE:cache,mode=max \
+            --push .
 
   deploy:
     name: Deploy to ECS
