@@ -1,0 +1,75 @@
+name: Build DevEnv Images → ECR
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/devenv/**'
+      - '.github/workflows/build-devenv.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPO: cc-on-bedrock/devenv
+
+jobs:
+  build-ubuntu:
+    name: Build Ubuntu DevEnv
+    runs-on: cc-bedrock-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Ubuntu image
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          IMAGE="$ECR_REGISTRY/$ECR_REPO"
+
+          docker build --platform linux/arm64 \
+            -t "$IMAGE:ubuntu-$GIT_SHA" \
+            -f docker/devenv/Dockerfile.ubuntu .
+
+          docker push "$IMAGE:ubuntu-$GIT_SHA"
+          docker tag "$IMAGE:ubuntu-$GIT_SHA" "$IMAGE:ubuntu-latest"
+          docker push "$IMAGE:ubuntu-latest"
+
+  build-al2023:
+    name: Build AL2023 DevEnv
+    runs-on: cc-bedrock-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push AL2023 image
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          IMAGE="$ECR_REGISTRY/$ECR_REPO"
+
+          docker build --platform linux/arm64 \
+            -t "$IMAGE:al2023-$GIT_SHA" \
+            -f docker/devenv/Dockerfile.al2023 .
+
+          docker push "$IMAGE:al2023-$GIT_SHA"
+          docker tag "$IMAGE:al2023-$GIT_SHA" "$IMAGE:al2023-latest"
+          docker push "$IMAGE:al2023-latest"
