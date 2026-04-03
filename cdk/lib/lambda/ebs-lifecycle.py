@@ -84,15 +84,14 @@ def create_volume(event: dict) -> dict:
     """
     Create a new gp3 EBS volume and store metadata in DynamoDB.
 
-    Required: user_id, az
-    Optional: size_gb (default 20)
+    Required: user_id
+    Optional: az (defaults to region + 'a'), size_gb (default 20)
+    Note: AZ is only needed for direct volume creation (warm_resume fallback).
+    Normal flow uses ECS managed EBS which handles AZ automatically.
     """
     user_id = event["user_id"]
-    az = event.get("az")
+    az = event.get("az", f"{REGION}a")
     size_gb = event.get("size_gb", 20)
-
-    if not az:
-        return error_response(400, "Missing required parameter: az")
 
     logger.info(f"Creating EBS volume for user {user_id} in {az}, size {size_gb}GB")
 
@@ -235,15 +234,14 @@ def restore_from_snapshot(event: dict) -> dict:
     """
     Create volume from snapshot in specified AZ.
 
-    Required: user_id, az
-    Optional: snapshot_id (if not provided, looks up from DynamoDB)
+    Required: user_id
+    Optional: az (defaults to region + 'a'), snapshot_id (looks up from DynamoDB if not provided)
+    Note: AZ defaults to region+'a' for warm_resume fallback. Normal start flow uses
+    ECS managed EBS (RunTask snapshotId) which handles AZ automatically.
     """
     user_id = event["user_id"]
-    az = event.get("az")
+    az = event.get("az", f"{REGION}a")
     snapshot_id = event.get("snapshot_id")
-
-    if not az:
-        return error_response(400, "Missing required parameter: az")
 
     # Get snapshot_id from DynamoDB if not provided
     if not snapshot_id:

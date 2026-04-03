@@ -227,10 +227,10 @@ def warm_resume(event: dict) -> dict:
     Resume a warm-stopped container: restore EBS from snapshot, start new task.
 
     Required: user_id
-    Optional: az (availability zone for volume restore)
+    Note: AZ is no longer needed — EBS snapshots are region-level,
+    ECS managed EBS handles AZ placement automatically via RunTask.
     """
     user_id = event.get("user_id")
-    az = event.get("az", f"{REGION}a")
 
     if not user_id:
         return error_response(400, "Missing required parameter: user_id")
@@ -256,7 +256,6 @@ def warm_resume(event: dict) -> dict:
                 Payload=json.dumps({
                     "action": "restore_from_snapshot",
                     "user_id": user_id,
-                    "az": az,
                 }),
             )
         else:
@@ -266,7 +265,6 @@ def warm_resume(event: dict) -> dict:
                 Payload=json.dumps({
                     "action": "create_and_attach",
                     "user_id": user_id,
-                    "az": az,
                 }),
             )
 

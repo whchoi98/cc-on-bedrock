@@ -101,9 +101,7 @@ DynamoDB `cc-user-volumes` 상태값:
    ├─ snapshot_id 있음 → snapshot에서 복원
    └─ snapshot_id 없음 → 새 빈 volume 생성
 
-2. AZ 결정
-   ├─ DynamoDB에 az 있음 → 같은 AZ의 capacity provider 선택 (cc-cp-a / cc-cp-b)
-   └─ az 없음 → 기본 capacity provider
+2. Capacity Provider: `cc-cp-devenv` (단일 multi-AZ, AZ 자동 배치)
 
 3. ECS RunTask
    └─ volumeConfigurations:

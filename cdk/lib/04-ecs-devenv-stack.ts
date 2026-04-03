@@ -249,46 +249,36 @@ export class EcsDevenvStack extends cdk.Stack {
       'echo ECS_AWSVPC_BLOCK_IMDS=true >> /etc/ecs/ecs.config',
     );
 
-    // ─── Per-AZ ASG + Capacity Provider (EKS Karpenter-style AZ-aware scaling) ───
-    const azs = vpc.availabilityZones.slice(0, 2); // Use first 2 AZs
-    const cpNames: string[] = [];
-
-    for (let i = 0; i < azs.length; i++) {
-      const azSuffix = azs[i].slice(-1); // 'a', 'c', etc.
-      const asg = new autoscaling.AutoScalingGroup(this, `EcsAsg-${azSuffix}`, {
-        vpc,
-        launchTemplate: ecsLaunchTemplate,
-        minCapacity: 0,
-        maxCapacity: 8,
-        desiredCapacity: 0,
-        vpcSubnets: {
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-          availabilityZones: [azs[i]],
-        },
-        newInstancesProtectedFromScaleIn: false,
-      });
-
-      const cpName = `cc-cp-${azSuffix}`;
-      const cp = new ecs.AsgCapacityProvider(this, `EcsCp-${azSuffix}`, {
-        capacityProviderName: cpName,
-        autoScalingGroup: asg,
-        enableManagedScaling: true,
-        enableManagedTerminationProtection: true,
-        targetCapacityPercent: 80,
-      });
-      this.cluster.addAsgCapacityProvider(cp);
-      cpNames.push(cpName);
-    }
-
-    // Export CP names for dashboard to select per-user AZ
-    new cdk.CfnOutput(this, 'CapacityProviderNames', {
-      value: cpNames.join(','),
-      exportName: 'cc-capacity-provider-names',
+    // ─── Single multi-AZ ASG + Capacity Provider ───
+    // EBS snapshots are region-level, so AZ pinning is unnecessary.
+    const asg = new autoscaling.AutoScalingGroup(this, 'EcsAsg', {
+      vpc,
+      launchTemplate: ecsLaunchTemplate,
+      minCapacity: 0,
+      maxCapacity: 16,
+      desiredCapacity: 0,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      newInstancesProtectedFromScaleIn: false,
     });
-    new cdk.CfnOutput(this, 'AvailabilityZones', {
-      value: azs.join(','),
-      exportName: 'cc-availability-zones',
+
+    asg.addLifecycleHook('TerminationHook', {
+      lifecycleTransition: autoscaling.LifecycleTransition.INSTANCE_TERMINATING,
+      heartbeatTimeout: cdk.Duration.minutes(10),
+      defaultResult: autoscaling.DefaultResult.CONTINUE,
     });
+
+    const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
+    cfnAsg.terminationPolicies = ['OldestInstance'];
+
+    const cp = new ecs.AsgCapacityProvider(this, 'EcsCp', {
+      capacityProviderName: 'cc-cp-devenv',
+      autoScalingGroup: asg,
+      enableManagedScaling: true,
+      enableManagedTerminationProtection: false,
+      targetCapacityPercent: 80,
+      instanceWarmupPeriod: 300,
+    });
+    this.cluster.addAsgCapacityProvider(cp);
 
     // Log Group
     const logGroup = new logs.LogGroup(this, 'DevenvLogGroup', {

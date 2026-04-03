@@ -232,10 +232,7 @@ export class DashboardStack extends cdk.Stack {
       desiredCount: 1,
       minHealthyPercent: 0,
       maxHealthyPercent: 200,
-      capacityProviderStrategies: [
-        { capacityProvider: 'cc-cp-a', weight: 1 },
-        { capacityProvider: 'cc-cp-b', weight: 1 },
-      ],
+      capacityProviderStrategies: [{ capacityProvider: 'cc-cp-devenv', weight: 1 }],
       securityGroups: [taskSg],
       enableExecuteCommand: true,
     });
