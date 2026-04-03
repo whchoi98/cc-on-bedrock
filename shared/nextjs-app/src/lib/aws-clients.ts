@@ -675,6 +675,7 @@ export async function startContainer(
       taskDefinition: finalTaskDefinition,
       count: 1,
       capacityProviderStrategy: [{ capacityProvider: CAPACITY_PROVIDER, weight: 1, base: 1 }],
+      placementStrategy: [{ type: "binpack", field: "memory" }],
       enableExecuteCommand: true,
       networkConfiguration: {
         awsvpcConfiguration: {
@@ -890,6 +891,7 @@ export async function startContainerWithProgress(
       taskDefinition: finalTaskDefinition,
       count: 1,
       capacityProviderStrategy: [{ capacityProvider: CAPACITY_PROVIDER, weight: 1, base: 1 }],
+      placementStrategy: [{ type: "binpack", field: "memory" }],
       enableExecuteCommand: true,
       networkConfiguration: {
         awsvpcConfiguration: {
