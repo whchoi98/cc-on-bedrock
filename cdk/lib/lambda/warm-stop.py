@@ -175,11 +175,24 @@ def warm_stop(event: dict) -> dict:
     task_id = task_arn.split("/")[-1]
     subdomain = event.get("subdomain", "")
 
-    # Step 0: Deregister Nginx route to prevent stale connections
+    # Step 0: Get EBS volume ID from task BEFORE stopping (attachment info lost after stop)
+    volume_id = None
+    try:
+        task_desc = ecs.describe_tasks(cluster=CLUSTER, tasks=[task_arn])
+        for attachment in task_desc.get("tasks", [{}])[0].get("attachments", []):
+            if attachment.get("type") == "AmazonElasticBlockStorage":
+                for detail in attachment.get("details", []):
+                    if detail.get("name") == "volumeId":
+                        volume_id = detail.get("value")
+                        logger.info(f"Found EBS volume {volume_id} for task {task_id}")
+    except ClientError as e:
+        logger.warning(f"Failed to get EBS volume ID from task {task_id}: {e}")
+
+    # Step 1: Deregister Nginx route to prevent stale connections
     if subdomain:
         deregister_route(subdomain)
 
-    # Step 1: Stop ECS task (triggers SIGTERM -> entrypoint S3 sync)
+    # Step 2: Stop ECS task (triggers SIGTERM -> entrypoint S3 sync)
     logger.info(f"Stopping ECS task {task_id} for user {user_id}")
     try:
         ecs.stop_task(
@@ -193,21 +206,24 @@ def warm_stop(event: dict) -> dict:
             raise
         logger.warning(f"Task {task_id} may already be stopped: {e}")
 
-    # Step 2: Invoke EBS lifecycle Lambda to snapshot+delete volume
-    logger.info(f"Invoking EBS lifecycle Lambda for user {user_id}")
-    try:
-        lambda_client.invoke(
-            FunctionName=EBS_LIFECYCLE_LAMBDA,
-            InvocationType="Event",  # Async invocation
-            Payload=json.dumps({
-                "action": "snapshot_and_detach",
-                "user_id": user_id,
-            }),
-        )
-        logger.info(f"EBS snapshot initiated for user {user_id}")
-    except ClientError as e:
-        logger.error(f"Failed to invoke EBS lifecycle Lambda: {e}")
-        # Continue anyway - task stop is the critical path
+    # Step 3: Invoke EBS lifecycle Lambda to snapshot+delete volume
+    if volume_id:
+        logger.info(f"Invoking EBS lifecycle Lambda for user {user_id}, volume {volume_id}")
+        try:
+            lambda_client.invoke(
+                FunctionName=EBS_LIFECYCLE_LAMBDA,
+                InvocationType="Event",
+                Payload=json.dumps({
+                    "action": "snapshot_and_detach",
+                    "user_id": user_id,
+                    "volume_id": volume_id,
+                }),
+            )
+            logger.info(f"EBS snapshot initiated for user {user_id}")
+        except ClientError as e:
+            logger.error(f"Failed to invoke EBS lifecycle Lambda: {e}")
+    else:
+        logger.warning(f"No EBS volume found for task {task_id}, skipping snapshot")
 
     # Step 3: Update DynamoDB status
     update_warm_stop_status(user_id, task_id)

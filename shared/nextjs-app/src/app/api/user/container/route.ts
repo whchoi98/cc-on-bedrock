@@ -193,24 +193,42 @@ export async function POST(req: NextRequest) {
         console.warn("[user/container] Route deregister:", err);
       }
 
+      // EBS mode: get volume ID from task BEFORE stopping (attachment info is lost after stop)
+      const serverStorageType = process.env.STORAGE_TYPE ?? "ebs";
+      let ebsVolumeId: string | undefined;
+      if (serverStorageType === "ebs") {
+        try {
+          const { ECSClient, DescribeTasksCommand: DescTasks } = await import("@aws-sdk/client-ecs");
+          const ecs = new ECSClient({ region });
+          const desc = await ecs.send(new DescTasks({
+            cluster: process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-devenv",
+            tasks: [taskArn],
+          }));
+          const ebsAttachment = desc.tasks?.[0]?.attachments?.find(a => a.type === "AmazonElasticBlockStorage");
+          ebsVolumeId = ebsAttachment?.details?.find(d => d.name === "volumeId")?.value;
+          if (ebsVolumeId) console.log(`[user/container] Found EBS volume ${ebsVolumeId} for ${user.subdomain}`);
+        } catch (err) {
+          console.warn("[user/container] Failed to get EBS volume ID:", err);
+        }
+      }
+
       await stopContainer({ taskArn, reason: "Stopped by user" });
 
-      // EBS mode: async snapshot for data persistence (volume kept for same-AZ reuse)
-      // Use server env var — JWT storageType can be stale/missing and default to "efs"
-      const serverStorageType = process.env.STORAGE_TYPE ?? "ebs";
-      if (serverStorageType === "ebs") {
+      // EBS mode: trigger snapshot with volume ID
+      if (serverStorageType === "ebs" && ebsVolumeId) {
         try {
           const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
           const lambda = new LambdaClient({ region });
           await lambda.send(new InvokeCommand({
             FunctionName: process.env.EBS_LIFECYCLE_LAMBDA ?? "cc-on-bedrock-ebs-lifecycle",
-            InvocationType: "Event", // async — don't block the response
+            InvocationType: "Event",
             Payload: Buffer.from(JSON.stringify({
               action: "snapshot_and_detach",
               user_id: user.subdomain,
+              volume_id: ebsVolumeId,
             })),
           }));
-          console.log(`[user/container] EBS snapshot triggered for ${user.subdomain}`);
+          console.log(`[user/container] EBS snapshot triggered for ${user.subdomain} (vol: ${ebsVolumeId})`);
         } catch (err) {
           console.warn("[user/container] EBS snapshot trigger failed:", err);
         }

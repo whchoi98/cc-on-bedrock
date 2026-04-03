@@ -189,11 +189,26 @@ export async function DELETE(req: NextRequest) {
       }
     }
 
+    // EBS mode: get volume ID from task BEFORE stopping
+    const serverStorageType = process.env.STORAGE_TYPE ?? "ebs";
+    let ebsVolumeId: string | undefined;
+    if (serverStorageType === "ebs" && body.taskArn) {
+      try {
+        const desc = await ecsExecClient.send(new DescribeTasksCommand({
+          cluster: process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-devenv",
+          tasks: [body.taskArn],
+        }));
+        const ebsAttachment = desc.tasks?.[0]?.attachments?.find(a => a.type === "AmazonElasticBlockStorage");
+        ebsVolumeId = ebsAttachment?.details?.find(d => d.name === "volumeId")?.value;
+      } catch (err) {
+        console.warn("[containers] Failed to get EBS volume ID:", err);
+      }
+    }
+
     await stopContainer(body);
 
-    // EBS mode: trigger async snapshot for data persistence
-    const serverStorageType = process.env.STORAGE_TYPE ?? "ebs";
-    if (serverStorageType === "ebs" && body.subdomain) {
+    // EBS mode: trigger snapshot with volume ID
+    if (serverStorageType === "ebs" && body.subdomain && ebsVolumeId) {
       try {
         const { LambdaClient, InvokeCommand } = await import("@aws-sdk/client-lambda");
         const lambda = new LambdaClient({ region });
@@ -203,9 +218,10 @@ export async function DELETE(req: NextRequest) {
           Payload: Buffer.from(JSON.stringify({
             action: "snapshot_and_detach",
             user_id: body.subdomain,
+            volume_id: ebsVolumeId,
           })),
         }));
-        console.log(`[containers] EBS snapshot triggered for ${body.subdomain}`);
+        console.log(`[containers] EBS snapshot triggered for ${body.subdomain} (vol: ${ebsVolumeId})`);
       } catch (err) {
         console.warn("[containers] EBS snapshot trigger failed:", err);
       }
