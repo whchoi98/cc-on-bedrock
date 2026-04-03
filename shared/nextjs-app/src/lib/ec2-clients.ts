@@ -340,8 +340,9 @@ async function registerRoute(subdomain: string, privateIp: string): Promise<void
     TableName: ROUTING_TABLE,
     Item: marshall({
       subdomain,
-      target_ip: privateIp,
-      target_port: 8080,
+      container_ip: privateIp,
+      port: 8080,
+      status: "active",
       registered_at: new Date().toISOString(),
     }),
   }));
