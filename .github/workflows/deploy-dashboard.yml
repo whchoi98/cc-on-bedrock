@@ -51,26 +51,16 @@ jobs:
         id: meta
         env:
           INPUT_TAG: ${{ inputs.image_tag }}
-          GIT_SHA: ${{ github.sha }}
-          ECR_REPO_FULL: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com/cc-on-bedrock/dashboard
+          RUN_NUMBER: ${{ github.run_number }}
+          GIT_SHA_SHORT: ${{ github.sha }}
         run: |
           if [ -n "$INPUT_TAG" ]; then
-            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            TAG="$INPUT_TAG"
           else
-            # Get latest git tag (e.g., v1.0.1), default to v0.0.0
-            GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-            BASE="${GIT_TAG#v}"  # strip 'v' prefix
-
-            # Find highest incremental suffix for this base tag in ECR
-            LAST_NUM=$(aws ecr describe-images --repository-name cc-on-bedrock/dashboard \
-              --query "imageDetails[?imageTags].imageTags[]" --output text 2>/dev/null \
-              | tr '\t' '\n' | grep "^${BASE}_" | sed "s/${BASE}_//" | sort -n | tail -1)
-            NEXT_NUM=$(( ${LAST_NUM:-0} + 1 ))
-
-            TAG="${BASE}_${NEXT_NUM}"
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            TAG="build-${RUN_NUMBER}-${GIT_SHA_SHORT:0:7}"
           fi
-          echo "Image tag: $(cat "$GITHUB_OUTPUT" | grep tag= | cut -d= -f2)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $TAG"
 
       - name: Build and push
         env:
