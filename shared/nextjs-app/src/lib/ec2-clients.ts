@@ -26,11 +26,22 @@ import {
   DeleteItemCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
+import {
+  IAMClient,
+  GetRoleCommand,
+  CreateRoleCommand,
+  PutRolePolicyCommand,
+  CreateInstanceProfileCommand,
+  AddRoleToInstanceProfileCommand,
+  GetInstanceProfileCommand,
+} from "@aws-sdk/client-iam";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const ec2Client = new EC2Client({ region });
 const ssmClient = new SSMClient({ region });
 const ddbClient = new DynamoDBClient({ region });
+const iamClient = new IAMClient({ region });
+const accountId = process.env.AWS_ACCOUNT_ID ?? "";
 
 const INSTANCE_TABLE = process.env.INSTANCE_TABLE ?? "cc-user-instances";
 const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
@@ -135,9 +146,13 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
   const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
 
+  // Per-user instance profile for individual Bedrock usage tracking
+  const instanceProfileName = await ensureUserInstanceProfile(input.subdomain);
+
   const result = await ec2Client.send(new RunInstancesCommand({
     LaunchTemplate: { LaunchTemplateName: LAUNCH_TEMPLATE },
     ...(amiId ? { ImageId: amiId } : {}),
+    IamInstanceProfile: { Name: instanceProfileName },
     InstanceType: tier.type as never,
     MinCount: 1,
     MaxCount: 1,
@@ -367,6 +382,87 @@ async function deregisterRoute(subdomain: string): Promise<void> {
   } catch (err) {
     console.warn(`[Routing] Deregister failed for ${subdomain}:`, err);
   }
+}
+
+const ROLE_PREFIX = "cc-on-bedrock-task";  // Reuse same naming convention as ECS for CloudTrail compatibility
+
+async function ensureUserInstanceProfile(subdomain: string): Promise<string> {
+  const roleName = `${ROLE_PREFIX}-${subdomain}`;
+  const profileName = roleName;
+
+  // Check if role already exists
+  try {
+    await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
+  } catch {
+    // Create per-user role with EC2 trust
+    console.log(`[IAM] Creating per-user role: ${roleName}`);
+    await iamClient.send(new CreateRoleCommand({
+      RoleName: roleName,
+      AssumeRolePolicyDocument: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [{
+          Effect: "Allow",
+          Principal: { Service: "ec2.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        }],
+      }),
+      PermissionsBoundary: `arn:aws:iam::${accountId}:policy/cc-on-bedrock-task-boundary`,
+      Description: `Per-user EC2 DevEnv Role for ${subdomain}`,
+      Tags: [
+        { Key: "cc-on-bedrock", Value: "user-instance-role" },
+        { Key: "subdomain", Value: subdomain },
+      ],
+    }));
+
+    // Attach Bedrock + SSM + CloudWatch permissions
+    await iamClient.send(new PutRolePolicyCommand({
+      RoleName: roleName,
+      PolicyName: "DevenvAccess",
+      PolicyDocument: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Sid: "BedrockClaude",
+            Effect: "Allow",
+            Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
+            Resource: [
+              `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
+              `arn:aws:bedrock:*:${accountId}:inference-profile/*anthropic.claude-*`,
+            ],
+          },
+          {
+            Sid: "SSMSessionManager",
+            Effect: "Allow",
+            Action: ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel", "ssm:UpdateInstanceInformation"],
+            Resource: "*",
+          },
+          {
+            Sid: "CloudWatch",
+            Effect: "Allow",
+            Action: ["cloudwatch:PutMetricData", "logs:CreateLogStream", "logs:PutLogEvents"],
+            Resource: "*",
+          },
+        ],
+      }),
+    }));
+
+    // Wait for IAM propagation
+    await new Promise(r => setTimeout(r, 8000));
+  }
+
+  // Ensure instance profile exists
+  try {
+    await iamClient.send(new GetInstanceProfileCommand({ InstanceProfileName: profileName }));
+  } catch {
+    await iamClient.send(new CreateInstanceProfileCommand({ InstanceProfileName: profileName }));
+    await iamClient.send(new AddRoleToInstanceProfileCommand({
+      InstanceProfileName: profileName,
+      RoleName: roleName,
+    }));
+    await new Promise(r => setTimeout(r, 5000)); // propagation
+  }
+
+  return profileName;
 }
 
 async function updateInstanceRecord(subdomain: string, updates: Record<string, string>): Promise<void> {
