@@ -143,12 +143,18 @@ export async function POST(req: NextRequest) {
         if (abortSignal.aborted) { controller.close(); return; }
 
         if (computeMode === "ec2") {
-          // EC2 mode: map to same 7 steps as ECS for UI compatibility
+          // EC2 mode: map to same 7 steps as ECS for UI progress bar
+          const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
           send(1, "iam_role", "in_progress", { message: "Setting up permissions..." });
+          await delay(500);
           send(1, "iam_role", "completed", { message: "Permissions ready" });
+          await delay(300);
 
           send(2, "storage", "in_progress", { message: "Preparing storage..." });
+          await delay(500);
           send(2, "storage", "completed", { message: "EBS volume preserved" });
+          await delay(300);
 
           send(3, "task_definition", "in_progress", { message: "Configuring instance..." });
           const result = await startInstance({
@@ -159,14 +165,20 @@ export async function POST(req: NextRequest) {
             resourceTier: tierToUse as "light" | "standard" | "power",
           });
           send(3, "task_definition", "completed", { message: "Instance configured" });
+          await delay(300);
 
           send(4, "password_store", "in_progress", { message: "Securing access..." });
+          await delay(500);
           send(4, "password_store", "completed", { message: "Password set" });
+          await delay(300);
 
           send(5, "container_start", "in_progress", { message: "Starting instance..." });
+          await delay(500);
           send(5, "container_start", "completed", { message: `Instance ${result.instanceId} running` });
+          await delay(300);
 
           send(6, "route_register", "in_progress", { message: "Connecting network..." });
+          await delay(500);
           send(6, "route_register", "completed", { message: "Route registered" });
 
           const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
