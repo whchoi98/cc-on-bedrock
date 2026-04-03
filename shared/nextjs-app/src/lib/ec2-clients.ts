@@ -139,7 +139,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     }));
     amiId = param.Parameter?.Value;
   } catch {
-    console.warn("[EC2] AMI ID not found in SSM, using Launch Template default");
+    throw new Error("AMI ID not found in SSM parameter /cc-on-bedrock/devenv/ami-id. Run scripts/build-ami.sh first.");
   }
 
   const sg = SG_MAP[input.securityPolicy] || SG_MAP.open;
@@ -150,10 +150,10 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   const instanceProfileName = await ensureUserInstanceProfile(input.subdomain);
 
   const result = await ec2Client.send(new RunInstancesCommand({
-    LaunchTemplate: { LaunchTemplateName: LAUNCH_TEMPLATE },
-    ...(amiId ? { ImageId: amiId } : {}),
+    ImageId: amiId!,
     IamInstanceProfile: { Name: instanceProfileName },
     InstanceType: tier.type as never,
+    MetadataOptions: { HttpTokens: "required", HttpPutResponseHopLimit: 2 },
     MinCount: 1,
     MaxCount: 1,
     SubnetId: subnet,
