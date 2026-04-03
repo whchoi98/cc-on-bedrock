@@ -44,12 +44,19 @@ const SG_MAP: Record<string, string> = {
   locked: process.env.SG_DEVENV_LOCKED ?? "",
 };
 
+// Instance tier → EC2 instance type mapping
+const INSTANCE_TIERS: Record<string, { type: string; cpu: string; memory: string }> = {
+  light:    { type: "t4g.medium",  cpu: "2 vCPU",  memory: "4 GiB" },
+  standard: { type: "t4g.large",   cpu: "2 vCPU",  memory: "8 GiB" },
+  power:    { type: "m7g.xlarge",  cpu: "4 vCPU",  memory: "16 GiB" },
+};
+
 export interface StartInstanceInput {
   subdomain: string;
   username: string;  // email
   department: string;
   securityPolicy: "open" | "restricted" | "locked";
-  instanceType?: string;  // override default
+  resourceTier?: "light" | "standard" | "power";
 }
 
 export interface InstanceInfo {
@@ -126,11 +133,12 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
   const sg = SG_MAP[input.securityPolicy] || SG_MAP.open;
   const subnet = VPC_SUBNET_IDS[Math.floor(Math.random() * VPC_SUBNET_IDS.length)];
+  const tier = INSTANCE_TIERS[input.resourceTier ?? "standard"];
 
   const result = await ec2Client.send(new RunInstancesCommand({
     LaunchTemplate: { LaunchTemplateName: LAUNCH_TEMPLATE },
     ...(amiId ? { ImageId: amiId } : {}),
-    ...(input.instanceType ? { InstanceType: input.instanceType as never } : {}),
+    InstanceType: tier.type as never,
     MinCount: 1,
     MaxCount: 1,
     SubnetId: subnet,

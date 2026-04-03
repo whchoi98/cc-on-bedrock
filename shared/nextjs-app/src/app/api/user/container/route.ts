@@ -141,6 +141,7 @@ export async function POST(req: NextRequest) {
           username: user.email,
           department: (user as unknown as Record<string, string>).department ?? "default",
           securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+          resourceTier: (requestedTier ?? user.resourceTier ?? "standard") as "light" | "standard" | "power",
         });
         return NextResponse.json({ success: true, data: { taskArn: result.instanceId } });
       }
