@@ -33,21 +33,19 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
 
-      - uses: docker/setup-buildx-action@v3
-
       - name: Build and push Ubuntu image
         env:
           GIT_SHA: ${{ github.sha }}
         run: |
           IMAGE="$ECR_REGISTRY/$ECR_REPO"
 
-          docker buildx build --platform linux/arm64 \
+          docker build --platform linux/arm64 \
             -t "$IMAGE:ubuntu-$GIT_SHA" \
             -t "$IMAGE:ubuntu-latest" \
-            -f docker/devenv/Dockerfile.ubuntu \
-            --cache-from type=registry,ref=$IMAGE:ubuntu-cache \
-            --cache-to type=registry,ref=$IMAGE:ubuntu-cache,mode=max \
-            --push docker/devenv
+            -f docker/devenv/Dockerfile.ubuntu docker/devenv
+
+          docker push "$IMAGE:ubuntu-$GIT_SHA"
+          docker push "$IMAGE:ubuntu-latest"
 
   build-al2023:
     name: Build AL2023 DevEnv
@@ -63,18 +61,16 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
 
-      - uses: docker/setup-buildx-action@v3
-
       - name: Build and push AL2023 image
         env:
           GIT_SHA: ${{ github.sha }}
         run: |
           IMAGE="$ECR_REGISTRY/$ECR_REPO"
 
-          docker buildx build --platform linux/arm64 \
+          docker build --platform linux/arm64 \
             -t "$IMAGE:al2023-$GIT_SHA" \
             -t "$IMAGE:al2023-latest" \
-            -f docker/devenv/Dockerfile.al2023 \
-            --cache-from type=registry,ref=$IMAGE:al2023-cache \
-            --cache-to type=registry,ref=$IMAGE:al2023-cache,mode=max \
-            --push docker/devenv
+            -f docker/devenv/Dockerfile.al2023 docker/devenv
+
+          docker push "$IMAGE:al2023-$GIT_SHA"
+          docker push "$IMAGE:al2023-latest"
