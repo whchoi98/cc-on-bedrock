@@ -130,7 +130,7 @@ def check_idle(event: dict) -> dict:
                     "action": "warm_stop_triggered",
                 })
                 # Trigger warm stop asynchronously
-                trigger_warm_stop(user_id, task_arn, subdomain=task_info.get("subdomain", ""))
+                trigger_warm_stop(user_id, task_arn, subdomain=user_id)
 
             elif idle_minutes >= IDLE_THRESHOLD_MINUTES:
                 # Idle for 30+ minutes -> send warning
@@ -357,7 +357,7 @@ def schedule_shutdown(event: dict) -> dict:
 
         # Trigger warm stop
         logger.info(f"Stopping task {task_id} (user: {user_id}) - scheduled shutdown")
-        trigger_warm_stop(user_id, task_arn, subdomain=task_info.get("subdomain", ""))
+        trigger_warm_stop(user_id, task_arn, subdomain=user_id)
         stopped_tasks.append({
             "task_arn": task_arn,
             "user_id": user_id,
@@ -420,8 +420,8 @@ def get_task_info(task_arn: str) -> dict | None:
         return {
             "task_arn": task_arn,
             "task_id": task_arn.split("/")[-1],
-            "user_id": tags.get("username", tags.get("user_id", "unknown")),
-            "subdomain": tags.get("subdomain", ""),
+            "user_id": tags.get("subdomain", tags.get("user_id", "unknown")),
+            "email": tags.get("username", ""),
             "department": tags.get("department", "default"),
             "no_auto_stop": tags.get("no_auto_stop", "").lower() == "true",
             "started_at": task.get("startedAt"),
