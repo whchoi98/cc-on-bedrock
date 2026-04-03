@@ -102,6 +102,16 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     // Try to start existing stopped instance
     const desc = await describeInstance(existing.instanceId);
     if (desc && desc.status === "stopped") {
+      // Resize instance type if tier changed
+      const newType = INSTANCE_TIERS[input.resourceTier ?? "standard"].type;
+      if (desc.instanceType !== newType) {
+        console.log(`[EC2] Resizing ${existing.instanceId}: ${desc.instanceType} → ${newType}`);
+        await ec2Client.send(new ModifyInstanceAttributeCommand({
+          InstanceId: existing.instanceId,
+          InstanceType: { Value: newType },
+        }));
+      }
+
       console.log(`[EC2] Starting existing instance ${existing.instanceId} for ${input.subdomain}`);
       await ec2Client.send(new StartInstancesCommand({
         InstanceIds: [existing.instanceId],
