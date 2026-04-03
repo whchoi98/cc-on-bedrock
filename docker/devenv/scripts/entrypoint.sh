@@ -37,7 +37,7 @@ if [ "$STORAGE_TYPE" = "ebs" ]; then
   fi
 
   mkdir -p /data/home /data/usr-local
-  chown coder:coder /data/home /data/usr-local
+  chown -R coder:coder /data/home /data/usr-local
 
   # Persist /usr/local: copy Docker image contents on first boot
   if [ ! -f /data/usr-local/.initialized ]; then
