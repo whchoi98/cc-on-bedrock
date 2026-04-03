@@ -208,7 +208,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       "#!/bin/bash",
       `echo "USER_SUBDOMAIN=${input.subdomain}" >> /etc/environment`,
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
-      `echo "ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-6-v1:0" >> /etc/environment`,
+      `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
       `# Set per-user code-server password`,
       `mkdir -p /home/coder/.config/code-server`,
