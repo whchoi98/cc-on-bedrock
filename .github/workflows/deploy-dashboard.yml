@@ -51,9 +51,31 @@ jobs:
         env:
           INPUT_TAG: ${{ inputs.image_tag }}
           GIT_SHA: ${{ github.sha }}
+          ECR_REPO_FULL: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com/cc-on-bedrock/dashboard
         run: |
-          TAG="${INPUT_TAG:-$GIT_SHA}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_TAG" ]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          else
+            # Get latest git tag (e.g., v1.0.1), default to v0.0.0
+            GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            BASE="${GIT_TAG#v}"  # strip 'v' prefix
+
+            # Find highest incremental suffix for this base tag in ECR
+            EXISTING=$(aws ecr describe-images --repository-name cc-on-bedrock/dashboard \
+              --query "imageDetails[*].imageTags[]" --output text 2>/dev/null \
+              | tr '\t' '\n' | grep "^${BASE}_" | sort -t_ -k2 -n | tail -1)
+
+            if [ -n "$EXISTING" ]; then
+              LAST_NUM=$(echo "$EXISTING" | awk -F_ '{print $NF}')
+              NEXT_NUM=$((LAST_NUM + 1))
+            else
+              NEXT_NUM=1
+            fi
+
+            TAG="${BASE}_${NEXT_NUM}"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Image tag: $(cat "$GITHUB_OUTPUT" | grep tag= | cut -d= -f2)"
 
       - name: Build and push
         env:
