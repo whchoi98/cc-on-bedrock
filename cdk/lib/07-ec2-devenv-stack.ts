@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
@@ -49,7 +48,7 @@ export class Ec2DevenvStack extends cdk.Stack {
       allowAllOutbound: true,
     });
     this.sgOpen.addIngressRule(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Peer.ipv4(config.vpcCidr),
       ec2.Port.tcp(8080),
       'code-server from VPC (via Nginx)',
     );
@@ -60,7 +59,7 @@ export class Ec2DevenvStack extends cdk.Stack {
       allowAllOutbound: false,
     });
     this.sgRestricted.addIngressRule(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Peer.ipv4(config.vpcCidr),
       ec2.Port.tcp(8080),
       'code-server from VPC',
     );
@@ -75,13 +74,13 @@ export class Ec2DevenvStack extends cdk.Stack {
       allowAllOutbound: false,
     });
     this.sgLocked.addIngressRule(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Peer.ipv4(config.vpcCidr),
       ec2.Port.tcp(8080),
       'code-server from VPC',
     );
     // Locked: only VPC endpoints (HTTPS to VPC CIDR)
     this.sgLocked.addEgressRule(
-      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Peer.ipv4(config.vpcCidr),
       ec2.Port.tcp(443),
       'HTTPS to VPC endpoints only',
     );
@@ -120,15 +119,8 @@ export class Ec2DevenvStack extends cdk.Stack {
     });
 
     // ─── Launch Template ───
-    // AMI ID resolved at deploy time from SSM Parameter Store (set by build-ami.sh)
-    // Dashboard API reads this SSM param at runtime for RunInstances
-    const amiParam = new ssm.StringParameter(this, 'DevenvAmiParam', {
-      parameterName: '/cc-on-bedrock/devenv/ami-id',
-      stringValue: 'ami-placeholder',  // Updated by build-ami.sh
-      description: 'CC-on-Bedrock DevEnv AMI ID (updated by build-ami.sh)',
-    });
-
-    // Launch Template uses latest Ubuntu ARM64 as fallback; Dashboard API overrides with AMI param at RunInstances
+    // AMI ID is managed by build-ami.sh → SSM Parameter /cc-on-bedrock/devenv/ami-id
+    // Dashboard API reads it at runtime for RunInstances
     this.launchTemplate = new ec2.LaunchTemplate(this, 'DevenvLaunchTemplate', {
       launchTemplateName: 'cc-on-bedrock-devenv',
       instanceType: new ec2.InstanceType(config.devenvInstanceType),
