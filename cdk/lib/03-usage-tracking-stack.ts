@@ -303,6 +303,64 @@ export class UsageTrackingStack extends cdk.Stack {
       event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
     }));
 
+    // ─── EC2 Idle Stop Lambda (computeMode: 'ec2') ───
+    const ec2IdleStopLambda = new lambda.Function(this, 'Ec2IdleStopLambda', {
+      functionName: 'cc-on-bedrock-ec2-idle-stop',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'ec2-idle-stop.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 256,
+      environment: {
+        REGION: cdk.Aws.REGION,
+        INSTANCE_TABLE: 'cc-user-instances',
+        ROUTING_TABLE: 'cc-routing-table',
+        USAGE_TABLE: this.usageTable.tableName,
+        IDLE_THRESHOLD_MINUTES: '30',
+        SNS_TOPIC_ARN: alertTopic.topicArn,
+        EOD_SHUTDOWN_ENABLED: 'true',
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    // EC2 idle-stop permissions
+    ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ec2:DescribeInstances', 'ec2:StopInstances'],
+      resources: ['*'],
+    }));
+    ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:GetMetricStatistics', 'cloudwatch:GetMetricData'],
+      resources: ['*'],
+    }));
+    ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:Scan', 'dynamodb:GetItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
+      resources: [
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-instances`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
+      ],
+    }));
+    this.usageTable.grantReadData(ec2IdleStopLambda);
+    alertTopic.grantPublish(ec2IdleStopLambda);
+
+    // EventBridge: EC2 idle check every 5 minutes
+    const ec2IdleCheckRule = new events.Rule(this, 'Ec2IdleCheckRule', {
+      ruleName: 'cc-ec2-idle-check',
+      description: 'Check for idle EC2 devenv instances every 5 minutes',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+    });
+    ec2IdleCheckRule.addTarget(new targets.LambdaFunction(ec2IdleStopLambda, {
+      event: events.RuleTargetInput.fromObject({ action: 'check_idle' }),
+    }));
+
+    // EventBridge: EC2 EOD shutdown (18:00 KST)
+    const ec2EodRule = new events.Rule(this, 'Ec2EodShutdownRule', {
+      ruleName: 'cc-ec2-eod-shutdown',
+      schedule: events.Schedule.cron({ hour: '9', minute: '0' }),
+    });
+    ec2EodRule.addTarget(new targets.LambdaFunction(ec2IdleStopLambda, {
+      event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
+    }));
+
     // EBS-mode CfnOutputs
     new cdk.CfnOutput(this, 'UserVolumesTableName', {
       value: userVolumesTable.tableName,

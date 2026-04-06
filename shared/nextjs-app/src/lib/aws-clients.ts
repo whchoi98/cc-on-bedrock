@@ -306,16 +306,23 @@ export async function resetUserEnvironment(
 ): Promise<{ stopped: boolean; routeCleared: boolean; snapshotTriggered: boolean }> {
   const result = { stopped: false, routeCleared: false, snapshotTriggered: false };
 
-  // 1. Stop running container for this subdomain
+  // 1. Stop running container/instance for this subdomain
+  const computeMode = process.env.COMPUTE_MODE ?? "ec2";
   try {
-    const containers = await listContainers();
-    const userContainer = containers.find(
-      (c) => c.subdomain === subdomain &&
-        (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
-    );
-    if (userContainer) {
-      await stopContainer({ taskArn: userContainer.taskArn, reason: "Environment reset by admin" });
+    if (computeMode === "ec2") {
+      const { stopInstance } = await import("@/lib/ec2-clients");
+      await stopInstance(subdomain, "Environment reset by admin");
       result.stopped = true;
+    } else {
+      const containers = await listContainers();
+      const userContainer = containers.find(
+        (c) => c.subdomain === subdomain &&
+          (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
+      );
+      if (userContainer) {
+        await stopContainer({ taskArn: userContainer.taskArn, reason: "Environment reset by admin" });
+        result.stopped = true;
+      }
     }
   } catch (err) {
     console.warn("[resetUserEnvironment] Failed to stop container:", err);
