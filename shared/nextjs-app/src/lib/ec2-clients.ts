@@ -210,6 +210,8 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `echo "CLAUDE_CODE_USE_BEDROCK=1" >> /etc/environment`,
       `echo "ANTHROPIC_MODEL=global.anthropic.claude-sonnet-4-6" >> /etc/environment`,
       `echo "AWS_DEFAULT_REGION=${region}" >> /etc/environment`,
+      `# Ensure workspace directory exists`,
+      `sudo -u coder mkdir -p /home/coder/workspace`,
       `# Set per-user code-server password`,
       `mkdir -p /home/coder/.config/code-server`,
       `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
