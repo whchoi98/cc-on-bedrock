@@ -190,16 +190,70 @@ Admin 승인 →
   → 정지 인스턴스: 다음 Start 시 적용
 ```
 
-### 4.4 IAM 확장 (DynamoDB 등)
+### 4.4 IAM 확장 — Pre-defined Policy Sets
+
+사전 정의된 policy template을 선택하고, 리소스를 지정하는 방식:
+
+#### Policy Set Catalog (DynamoDB `cc-policy-sets` 또는 config)
+
+| Policy Set | 서비스 | Actions | 리소스 선택 UI |
+|-----------|--------|---------|--------------|
+| `dynamodb-readwrite` | DynamoDB | Scan, Query, GetItem, PutItem, UpdateItem, DeleteItem | 테이블 목록 dropdown (account의 DynamoDB 테이블 조회) |
+| `dynamodb-readonly` | DynamoDB | Scan, Query, GetItem | 테이블 목록 dropdown |
+| `s3-readwrite` | S3 | GetObject, PutObject, ListBucket, DeleteObject | 버킷 목록 dropdown + prefix input |
+| `s3-readonly` | S3 | GetObject, ListBucket | 버킷 목록 dropdown |
+| `eks-access` | EKS | eks:DescribeCluster, eks:AccessKubernetesApi | 클러스터 목록 dropdown → AccessEntry 등록 |
+| `sqs-readwrite` | SQS | SendMessage, ReceiveMessage, DeleteMessage | 큐 목록 dropdown |
+| `sns-publish` | SNS | Publish | 토픽 목록 dropdown |
+| `secretsmanager-read` | Secrets Manager | GetSecretValue | 시크릿 목록 dropdown (prefix 필터) |
+
+#### 신청 Flow
 
 ```
-User → POST /api/user/container-request
-  body: { type: "iam_extension", details: { service: "dynamodb", actions: [...], reason: "..." } }
+User → /user Settings 탭 → "IAM 권한 신청"
+  1. Policy Set 선택 (dropdown: dynamodb-readwrite 등)
+  2. 리소스 선택 (서비스별 동적 UI)
+     - DynamoDB: 테이블 목록 조회 → 체크박스 선택
+     - S3: 버킷 목록 → 버킷 선택 + prefix 입력
+     - EKS: 클러스터 목록 → 클러스터 선택
+  3. 사유 입력 + 기간 선택 (7일/30일/90일/영구)
+  4. "신청" → DynamoDB cc-approval-requests
 
 Admin 승인 →
-  → iam:PutRolePolicy로 cc-on-bedrock-task-{subdomain}에 추가 정책 부착
-  → Permission boundary (cc-on-bedrock-task-boundary)가 최대 범위 제한
-  → duration 설정 시: EventBridge 스케줄로 자동 만료
+  → iam:PutRolePolicy (policy set template + 선택한 리소스 ARN)
+  → EKS의 경우: eks:CreateAccessEntry 추가 호출
+  → Permission boundary가 최대 범위 제한
+  → duration 설정 시: EventBridge 스케줄로 자동 만료 (policy 삭제)
+```
+
+#### details 예시
+
+```json
+{
+  "policySet": "dynamodb-readwrite",
+  "resources": [
+    "arn:aws:dynamodb:ap-northeast-2:180294183052:table/my-project-users",
+    "arn:aws:dynamodb:ap-northeast-2:180294183052:table/my-project-orders"
+  ],
+  "reason": "프로젝트 데이터베이스 접근 필요",
+  "duration": "30days",
+  "expiresAt": "2026-05-08T00:00:00Z"
+}
+```
+
+```json
+{
+  "policySet": "eks-access",
+  "resources": [
+    "arn:aws:eks:ap-northeast-2:180294183052:cluster/my-eks-cluster"
+  ],
+  "eksAccessConfig": {
+    "kubernetesGroups": ["developers"],
+    "type": "STANDARD"
+  },
+  "reason": "EKS 클러스터 디버깅",
+  "duration": "7days"
+}
 ```
 
 ### 4.5 Admin UI
