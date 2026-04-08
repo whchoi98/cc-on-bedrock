@@ -15,7 +15,7 @@ export default async function MonitoringPage() {
           Operations Monitoring
         </h1>
         <p className="mt-1 text-sm text-gray-400">
-          Proxy health, ECS status, active sessions, and error rates
+          Instance health, active sessions, and error rates
         </p>
       </div>
       <MonitoringDashboard

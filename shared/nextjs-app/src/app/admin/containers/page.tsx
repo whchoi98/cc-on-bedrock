@@ -12,10 +12,10 @@ export default async function ContainersPage() {
     <div>
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-100">
-          Container Management
+          Instance Management
         </h1>
         <p className="mt-1 text-sm text-gray-400">
-          Start, stop, and manage ECS dev environment containers
+          Start, stop, and manage dev environment instances
         </p>
       </div>
       <ContainerManagement

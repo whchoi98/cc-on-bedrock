@@ -200,7 +200,7 @@ export default function StorageTab({ user, container }: StorageTabProps) {
         <h2 className="text-lg font-semibold text-gray-100 mb-4">Disk Usage</h2>
 
         {!isRunning ? (
-          <p className="text-sm text-gray-500">Container must be running to view disk usage.</p>
+          <p className="text-sm text-gray-500">Instance must be running to view disk usage.</p>
         ) : diskLoading && !diskUsage ? (
           <div className="flex items-center gap-2 text-gray-400 text-sm">
             <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />

@@ -207,7 +207,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         <StatCard
           title={t("home.activeContainers")}
           value={data.activeContainers.toString()}
-          description="Live ECS Task Instances"
+          description="Running EC2 Instances"
           trend={{ value: 4.1, isPositive: true }}
         />
         <StatCard
@@ -256,7 +256,7 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           <SectionHeader title={t("home.modelUsage")} subtitle="Compute Distribution" icon={Zap} />
           <div className="space-y-3 mt-4">
             <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
-              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Active Containers</p>
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Active Instances</p>
               <p className="text-2xl font-black text-white">{data.activeContainers}</p>
             </div>
             <div className="bg-[#0d1117] rounded-xl p-4 border border-white/5">
