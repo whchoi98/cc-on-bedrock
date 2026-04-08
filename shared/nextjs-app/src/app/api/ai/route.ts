@@ -192,6 +192,11 @@ export async function POST(req: NextRequest) {
       status: 401, headers: { "Content-Type": "application/json" },
     });
   }
+  if (!session.user.isAdmin) {
+    return new Response(JSON.stringify({ error: "Admin access required" }), {
+      status: 403, headers: { "Content-Type": "application/json" },
+    });
+  }
 
   let body: { messages: { role: string; content: string }[]; lang?: string };
   try {
