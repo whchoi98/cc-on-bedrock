@@ -494,7 +494,7 @@ export class UsageTrackingStack extends cdk.Stack {
     new logs.SubscriptionFilter(this, 'BedrockLogsToUsageTracker', {
       logGroup: bedrockLogGroup,
       destination: new logsDest.LambdaDestination(trackerLambda),
-      filterPattern: logs.FilterPattern.allEvents(),
+      filterPattern: logs.FilterPattern.stringValue('$.identity.arn', '=', '*cc-on-bedrock-task*'),
     });
 
     // Approval Requests Table (container request workflow)

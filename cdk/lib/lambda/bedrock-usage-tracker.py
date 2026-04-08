@@ -80,9 +80,9 @@ def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
         print(f"Resolved EC2 role {role_name} → {user}(default)")
         return user, "default"
 
-    # Fallback: use role name as-is
-    _task_cache[cache_key] = (role_name, "default")
-    return role_name, "default"
+    # Not a cc-on-bedrock role — skip tracking
+    print(f"Skipping non-cc-on-bedrock role: {role_name}")
+    return None, None
 
 
 def get_model_pricing(model_id: str) -> dict:
@@ -193,8 +193,11 @@ def process_invocation_log(log_event: dict):
     timestamp = data.get("timestamp", datetime.utcnow().isoformat())
     date_str = timestamp[:10]
 
-    # Resolve user
+    # Resolve user — skip if not a cc-on-bedrock role
     username, department = resolve_user_from_arn(identity_arn, source_ip)
+    if username is None:
+        return
+
     model = normalize_model(model_id)
     cost = estimate_cost(model_id, input_tokens, output_tokens)
 
@@ -214,6 +217,9 @@ def process_cloudtrail_event(detail: dict):
     model_id = detail.get("requestParameters", {}).get("modelId", "unknown")
 
     username, department = resolve_user_from_arn(identity_arn, source_ip)
+    if username is None:
+        return
+
     model = normalize_model(model_id)
 
     # CloudTrail doesn't have token counts - just track the request
