@@ -180,6 +180,7 @@ export class DashboardStack extends cdk.Stack {
       actions: [
         'dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem',
         'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
+        'dynamodb:BatchWriteItem',
       ],
       resources: [
         `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-usage`,

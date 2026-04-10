@@ -169,6 +169,13 @@ export async function POST(req: NextRequest) {
         console.log(`[admin/ebs-resize] ModifyVolume ${item.volumeId} → ${item.requestedSizeGb}GB for ${userId}`);
       } catch (ec2Err) {
         console.error("[admin/ebs-resize] ModifyVolume failed:", ec2Err);
+        // Rollback DDB status to resize_pending so admin can retry
+        await dynamodb.send(new UpdateItemCommand({
+          TableName: USER_VOLUMES_TABLE,
+          Key: { userId: { S: userId } },
+          UpdateExpression: "SET resizeStatus = :status",
+          ExpressionAttributeValues: { ":status": { S: "resize_pending" } },
+        })).catch(() => {});
         return NextResponse.json(
           { success: false, error: `Volume resize failed: ${ec2Err instanceof Error ? ec2Err.message : "Unknown error"}` },
           { status: 500 }

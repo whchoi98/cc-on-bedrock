@@ -351,7 +351,8 @@ export class SecurityStack extends cdk.Stack {
       actions: [
         'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
         'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
-        'ec2:ModifyInstanceAttribute',
+        'ec2:ModifyInstanceAttribute', 'ec2:ModifyNetworkInterfaceAttribute',
+        'ec2:ModifyVolume', 'ec2:DescribeVolumes',
       ],
       resources: ['*'],
     }));

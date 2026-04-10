@@ -247,6 +247,11 @@ export default function UsersTable({
                   )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">
+                  <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full uppercase ${storageBadge[user.storageType ?? "ebs"] ?? storageBadge.ebs}`}>
+                    {(user.storageType ?? "ebs").toUpperCase()}
+                  </span>
+                </td>
+                <td className="px-5 py-3.5 whitespace-nowrap">
                   <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${statusBadge[user.status] ?? "bg-gray-800 text-gray-500"}`}>
                     {user.status === "FORCE_CHANGE_PASSWORD" ? "Pending" : user.enabled ? user.status : "Disabled"}
                   </span>

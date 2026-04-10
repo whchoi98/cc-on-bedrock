@@ -131,18 +131,33 @@ export async function POST(req: NextRequest) {
     }));
 
     // 3. Create a firewall rule linking this list to the rule group
-    // Priority: ALLOW rules get lower numbers (higher priority) than DENY
-    const priority = listType === "ALLOW" ? 500 + Math.floor(Math.random() * 400) : 1000 + Math.floor(Math.random() * 400);
+    // Query existing rules to find next available priority (avoid collisions)
+    const { ListFirewallRulesCommand } = await import("@aws-sdk/client-route53resolver");
+    const existingRules = await r53.send(new ListFirewallRulesCommand({
+      FirewallRuleGroupId: ruleGroupId,
+    }));
+    const usedPriorities = new Set((existingRules.FirewallRules ?? []).map((r) => r.Priority));
+    const baseRange = listType === "ALLOW" ? 500 : 1000;
+    let priority = baseRange;
+    while (usedPriorities.has(priority) && priority < baseRange + 400) priority++;
     const action = listType === "ALLOW" ? "ALLOW" : "BLOCK";
 
-    await r53.send(new CreateFirewallRuleCommand({
-      FirewallRuleGroupId: ruleGroupId,
-      FirewallDomainListId: firewallDomainListId,
-      Priority: priority,
-      Action: action,
-      ...(action === "BLOCK" ? { BlockResponse: "NXDOMAIN" } : {}),
-      Name: `cc-dlp-${tier}-${listType.toLowerCase()}-${firewallDomainListId.slice(-8)}`,
-    }));
+    try {
+      await r53.send(new CreateFirewallRuleCommand({
+        FirewallRuleGroupId: ruleGroupId,
+        FirewallDomainListId: firewallDomainListId,
+        Priority: priority,
+        Action: action,
+        ...(action === "BLOCK" ? { BlockResponse: "NXDOMAIN" } : {}),
+        Name: `cc-dlp-${tier}-${listType.toLowerCase()}-${firewallDomainListId.slice(-8)}`,
+      }));
+    } catch (ruleErr) {
+      // Cleanup: delete the orphaned domain list if rule creation fails
+      await r53.send(new DeleteFirewallDomainListCommand({
+        FirewallDomainListId: firewallDomainListId,
+      })).catch(() => {});
+      throw ruleErr;
+    }
 
     // 4. Save to DynamoDB
     const listId = firewallDomainListId;
