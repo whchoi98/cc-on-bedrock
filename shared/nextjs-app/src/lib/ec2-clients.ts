@@ -200,8 +200,11 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       Tags: [
         { Key: "Name", Value: `cc-devenv-${input.subdomain}` },
         { Key: "subdomain", Value: input.subdomain },
-        { Key: "username", Value: input.username },
-        { Key: "department", Value: input.department },
+        { Key: "cc:user", Value: input.username },
+        { Key: "cc:department", Value: input.department },
+        { Key: "cc:project", Value: "cc-on-bedrock" },
+        { Key: "cc:subdomain", Value: input.subdomain },
+        { Key: "cc:cost-center", Value: input.department },
         { Key: "securityPolicy", Value: input.securityPolicy },
         { Key: "managed_by", Value: "cc-on-bedrock" },
       ],
@@ -715,11 +718,16 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
   const profileName = roleName;
 
-  // Cost allocation tags for AWS Billing integration (Bedrock IAM Cost Allocation)
+  // Cost allocation tags for AWS Billing integration
+  // Bedrock IAM Cost Allocation (2026-04): tags on IAM roles are used by
+  // Cost Explorer + CUR 2.0 to attribute Bedrock inference costs per user.
+  // Activate these as cost allocation tags in Billing Console.
   const costAllocationTags = [
-    { Key: "username", Value: username },
-    { Key: "department", Value: department },
-    { Key: "project", Value: "cc-on-bedrock" },
+    { Key: "cc:user", Value: username },
+    { Key: "cc:department", Value: department },
+    { Key: "cc:project", Value: "cc-on-bedrock" },
+    { Key: "cc:subdomain", Value: subdomain },
+    { Key: "cc:cost-center", Value: department },
   ];
 
   // Check if role already exists
