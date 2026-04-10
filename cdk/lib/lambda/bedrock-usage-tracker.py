@@ -1,8 +1,8 @@
 """
 Bedrock Usage Tracker Lambda
 Processes Bedrock Invocation Logging events from TWO sources:
-  1. CloudWatch Logs Subscription (primary - has token counts)
-  2. EventBridge CloudTrail events (fallback - call counts only)
+  1. CloudWatch Logs Subscription (primary - has token counts + cost)
+  2. EventBridge CloudTrail events (fallback - request count only, no tokens)
 
 DynamoDB Schema:
   PK: USER#{username}  SK: {date}#{model}
@@ -19,10 +19,12 @@ from decimal import Decimal
 
 TABLE_NAME = os.environ.get("USAGE_TABLE_NAME", "cc-on-bedrock-usage")
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER_NAME", "cc-on-bedrock-devenv")
+TASK_ROLE_PREFIX = "cc-on-bedrock-task-"
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 ecs_client = boto3.client("ecs")
+ec2_client = boto3.client("ec2")
 
 # Bedrock pricing (ap-northeast-2, per 1M tokens)
 PRICING = {
@@ -34,54 +36,62 @@ PRICING = {
     "default": {"input": 3.0, "output": 15.0},
 }
 
-# Cache: source IP → (username, department)
+# Cache: identity_arn → (username, department)
 _task_cache: dict = {}
+# Cache: subdomain → department (from EC2 instance tags)
+_dept_cache: dict = {}
+
+
+def _resolve_department(subdomain: str) -> str:
+    """Resolve department from EC2 instance tags for a user subdomain."""
+    if subdomain in _dept_cache:
+        return _dept_cache[subdomain]
+    try:
+        resp = ec2_client.describe_instances(
+            Filters=[
+                {"Name": "tag:subdomain", "Values": [subdomain]},
+                {"Name": "tag:managed_by", "Values": ["cc-on-bedrock"]},
+            ],
+            MaxResults=5,
+        )
+        for reservation in resp.get("Reservations", []):
+            for inst in reservation.get("Instances", []):
+                tags = {t["Key"]: t["Value"] for t in inst.get("Tags", [])}
+                dept = tags.get("department", "default")
+                _dept_cache[subdomain] = dept
+                return dept
+    except Exception as e:
+        print(f"EC2 tag lookup failed for {subdomain}: {e}")
+    _dept_cache[subdomain] = "default"
+    return "default"
 
 
 def resolve_user_from_arn(identity_arn: str, source_ip: str = "") -> tuple:
-    """Resolve username and department from IAM role ARN or ECS task.
+    """Resolve username and department from IAM role ARN.
 
-    Identity ARN format for ECS tasks:
-    arn:aws:sts::ACCOUNT:assumed-role/ROLE_NAME/TASK_ID
-    The TASK_ID (session name) can be used to look up ECS task tags.
+    Identity ARN format:
+      arn:aws:sts::ACCOUNT:assumed-role/cc-on-bedrock-task-{subdomain}/SESSION
     """
+    if not identity_arn:
+        return None, None
+
     cache_key = identity_arn
     if cache_key in _task_cache:
         return _task_cache[cache_key]
 
     parts = identity_arn.split("/")
-    role_name = parts[1] if len(parts) >= 2 else "unknown"
-    session_name = parts[2] if len(parts) >= 3 else ""
-
-    # If session name looks like an ECS task ID (32 hex chars), look up tags
-    if len(session_name) == 32 and all(c in "0123456789abcdef" for c in session_name):
-        try:
-            region = os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2")
-            task_arn = f"arn:aws:ecs:{region}:{identity_arn.split(':')[4]}:task/{ECS_CLUSTER}/{session_name}"
-            tasks = ecs_client.describe_tasks(
-                cluster=ECS_CLUSTER, tasks=[task_arn], include=["TAGS"]
-            )["tasks"]
-            if tasks:
-                tags = {t["key"]: t["value"] for t in tasks[0].get("tags", [])}
-                user = tags.get("username", role_name)
-                dept = tags.get("department", "default")
-                _task_cache[cache_key] = (user, dept)
-                print(f"Resolved task {session_name[:8]}... → {user}({dept})")
-                return user, dept
-        except Exception as e:
-            print(f"ECS task lookup failed for {session_name[:8]}...: {e}")
+    role_name = parts[1] if len(parts) >= 2 else ""
 
     # EC2 per-user mode: role name is cc-on-bedrock-task-{subdomain}
-    # Extract subdomain for DynamoDB PK compatibility
-    TASK_ROLE_PREFIX = "cc-on-bedrock-task-"
     if role_name.startswith(TASK_ROLE_PREFIX):
         user = role_name[len(TASK_ROLE_PREFIX):]
-        _task_cache[cache_key] = (user, "default")
-        print(f"Resolved EC2 role {role_name} → {user}(default)")
-        return user, "default"
+        dept = _resolve_department(user)
+        _task_cache[cache_key] = (user, dept)
+        print(f"Resolved {role_name} → {user}({dept})")
+        return user, dept
 
-    # Not a cc-on-bedrock role — skip tracking
-    print(f"Skipping non-cc-on-bedrock role: {role_name}")
+    # Not a cc-on-bedrock per-user role — skip tracking
+    print(f"Skipping non-user role: {role_name}")
     return None, None
 
 
@@ -98,30 +108,33 @@ def normalize_model(model_id: str) -> str:
     """Normalize model ID to short form.
 
     Handles:
-      - ARN: arn:aws:bedrock:region:account:inference-profile/global.anthropic.claude-sonnet-4-6
-      - Prefixed: global.anthropic.claude-sonnet-4-6
+      - ARN: arn:aws:bedrock:region:account:inference-profile/global.anthropic.claude-sonnet-4-6-v1
+      - Prefixed: global.anthropic.claude-sonnet-4-6-v1
       - Plain: claude-sonnet-4-6
     """
-    # Extract from ARN if present
+    if not model_id or model_id == "unknown":
+        return "unknown"
+    # Extract model name from ARN (split on "/" first, handles both foundation-model and inference-profile)
     if "/" in model_id:
         model_id = model_id.split("/")[-1]
-    # Remove region prefixes
-    result = (model_id
-              .replace("global.anthropic.", "")
-              .replace("apac.anthropic.", "")
-              .replace("us.anthropic.", "")
-              .replace("eu.anthropic.", "")
-              .replace("anthropic.", "")
-              .split(":")[0])
-    # Remove version suffix like [1m]
-    if result.endswith("[1m]"):
-        result = result[:-4]
-    # Remove version suffix like -v1, -v2 at the end
-    for suffix in ["-v1", "-v2", "-v1:0", "-v2:0"]:
-        if result.endswith(suffix):
-            result = result[:-len(suffix)]
+    # If still looks like an ARN (starts with "arn:"), try splitting on ":" to find the model part
+    if model_id.startswith("arn:"):
+        # arn:aws:bedrock:region:account:resource-type:model-name
+        arn_parts = model_id.split(":")
+        model_id = arn_parts[-1] if len(arn_parts) > 5 else "unknown"
+    # Remove region/vendor prefixes
+    for prefix in ["global.anthropic.", "apac.anthropic.", "us.anthropic.", "eu.anthropic.", "anthropic."]:
+        model_id = model_id.replace(prefix, "")
+    # Remove colon suffix (e.g., ":0")
+    model_id = model_id.split(":")[0]
+    # Remove version suffixes
+    if model_id.endswith("[1m]"):
+        model_id = model_id[:-4]
+    for suffix in ["-v1", "-v2"]:
+        if model_id.endswith(suffix):
+            model_id = model_id[:-len(suffix)]
             break
-    return result
+    return model_id or "unknown"
 
 
 def estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
@@ -223,15 +236,25 @@ def process_invocation_log(log_event: dict):
 
 def process_cloudtrail_event(detail: dict):
     """Process a CloudTrail Bedrock event from EventBridge (fallback, no token counts)."""
+    if not detail or not isinstance(detail, dict):
+        print("Skipping: empty or invalid CloudTrail detail")
+        return
+
     event_name = detail.get("eventName", "")
     if event_name not in ("InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream"):
         return
 
+    # Check for error events (requestParameters is null on errors)
+    request_params = detail.get("requestParameters")
+    if not request_params or not isinstance(request_params, dict):
+        print(f"Skipping: no requestParameters in {event_name}")
+        return
+
     source_ip = detail.get("sourceIPAddress", "")
-    identity_arn = detail.get("userIdentity", {}).get("arn", "")
+    identity_arn = (detail.get("userIdentity") or {}).get("arn", "")
     event_time = detail.get("eventTime", datetime.utcnow().isoformat())
     date_str = event_time[:10]
-    model_id = detail.get("requestParameters", {}).get("modelId", "unknown")
+    model_id = request_params.get("modelId", "unknown")
 
     username, department = resolve_user_from_arn(identity_arn, source_ip)
     if username is None:
@@ -239,7 +262,7 @@ def process_cloudtrail_event(detail: dict):
 
     model = normalize_model(model_id)
 
-    # CloudTrail doesn't have token counts - just track the request
+    # CloudTrail doesn't have token counts — track request count only
     upsert_usage(username, department, date_str, model, 0, 0, 0)
 
 
@@ -247,20 +270,26 @@ def handler(event, context):
     """Handle events from CloudWatch Logs Subscription or EventBridge."""
     processed = 0
 
-    # Source 1: CloudWatch Logs Subscription (Bedrock Invocation Logging)
+    # Source 1: CloudWatch Logs Subscription (Bedrock Invocation Logging — primary, has tokens)
     if "awslogs" in event:
         compressed = base64.b64decode(event["awslogs"]["data"])
         log_data = json.loads(gzip.decompress(compressed))
         log_events = log_data.get("logEvents", [])
         print(f"Processing {len(log_events)} invocation log events")
         for log_event in log_events:
-            process_invocation_log(log_event)
-            processed += 1
+            try:
+                process_invocation_log(log_event)
+                processed += 1
+            except Exception as e:
+                print(f"Error processing invocation log: {e}")
 
-    # Source 2: EventBridge (CloudTrail - fallback)
+    # Source 2: EventBridge CloudTrail (fallback — request count only, no tokens)
     elif "detail" in event:
-        process_cloudtrail_event(event["detail"])
-        processed = 1
+        try:
+            process_cloudtrail_event(event.get("detail"))
+            processed = 1
+        except Exception as e:
+            print(f"Error processing CloudTrail event: {e}")
 
     else:
         print(f"Unknown event format: {json.dumps(event)[:200]}")
