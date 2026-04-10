@@ -55,6 +55,16 @@ export class UsageTrackingStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // DLP Domain Lists table (DNS Firewall domain management)
+    new dynamodb.Table(this, 'DlpDomainListTable', {
+      tableName: 'cc-dlp-domain-lists',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     // Lambda for processing CloudTrail events
     const trackerLambda = new lambda.Function(this, 'BedrockUsageTracker', {
       functionName: 'cc-on-bedrock-usage-tracker',

@@ -47,6 +47,7 @@ const navItems: NavItem[] = [
   { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
   { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
   { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
+  { href: "/admin/dlp", labelKey: "nav.dlpManagement", icon: ShieldCheck, adminOnly: true },
   { href: "/docs", labelKey: "nav.docs", icon: BookOpen, showForAll: true },
 ];
 

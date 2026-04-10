@@ -15,6 +15,7 @@ export class NetworkStack extends cdk.Stack {
   public readonly privateSubnets: ec2.ISubnet[];
   public readonly isolatedSubnets: ec2.ISubnet[];
   public readonly hostedZone: route53.IHostedZone;
+  public readonly dnsFirewallRuleGroupId: string;
 
   constructor(scope: Construct, id: string, props: NetworkStackProps) {
     super(scope, id, props);
@@ -104,6 +105,8 @@ export class NetworkStack extends cdk.Stack {
         blockResponse: 'NXDOMAIN',
       })),
     });
+
+    this.dnsFirewallRuleGroupId = dnsFirewallRuleGroup.attrId;
 
     new route53resolver.CfnFirewallRuleGroupAssociation(this, 'DnsFirewallAssociation', {
       firewallRuleGroupId: dnsFirewallRuleGroup.attrId,

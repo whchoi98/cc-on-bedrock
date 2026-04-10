@@ -107,6 +107,7 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   efsFileSystemId: ecsDevenvStack.efsFileSystemId,
   ecsInfrastructureRoleArn: securityStack.ecsInfrastructureRole.roleArn,
   webAclArn: wafStack.webAclArn,
+  dnsFirewallRuleGroupId: networkStack.dnsFirewallRuleGroupId,
   description: 'CC-on-Bedrock: Next.js Dashboard, ALB, CloudFront',
 });
 dashboardStack.addDependency(ecsDevenvStack);
