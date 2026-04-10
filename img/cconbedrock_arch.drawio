@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="cc-on-bedrock-arch" name="CC-on-Bedrock Enterprise Architecture">
-        <mxGraphModel dx="1517" dy="1377" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="3200" pageHeight="2000" background="#FFFFFF" math="0" shadow="0">
+        <mxGraphModel dx="1517" dy="1111" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="3200" pageHeight="2000" background="#FFFFFF" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -17,64 +17,66 @@
                     <mxGeometry x="55" y="60" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="user-dev" value="Developer Users" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#D45B07;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.users;fontFamily=Amazon Ember;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="55" y="206" width="50" height="50" as="geometry"/>
+                    <mxGeometry x="215" y="60" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="browser-label" value="Browser (HTTPS)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=10;fontColor=#545B64;fontStyle=2;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="50" y="160" width="150" height="22" as="geometry"/>
+                    <mxGeometry x="80" y="200" width="150" height="22" as="geometry"/>
                 </mxCell>
                 <mxCell id="route53" value="Route 53" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.route_53;fontFamily=Amazon Ember;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="215" y="146" width="50" height="50" as="geometry"/>
+                    <mxGeometry x="140" y="240" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="route53-desc" value="*.dev.domain.com&lt;br&gt;dashboard.domain.com" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="ext-zone" vertex="1">
-                    <mxGeometry x="10" y="268" width="140" height="30" as="geometry"/>
+                    <mxGeometry x="170" y="122" width="140" height="30" as="geometry"/>
                 </mxCell>
                 <mxCell id="edge-zone" value="Edge Services (Global)" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#232F3E;strokeWidth=2;fontFamily=Amazon Ember;fontSize=13;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#232F3E;container=1;collapsible=0;recursiveResize=0;" parent="1" vertex="1">
                     <mxGeometry x="390" y="500" width="330" height="800" as="geometry"/>
                 </mxCell>
                 <mxCell id="waf" value="WAF v2" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.waf;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="125" y="60" width="50" height="50" as="geometry"/>
+                    <mxGeometry x="145" y="79" width="50" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="waf-desc" value="WebACL (us-east-1)&lt;br&gt;Rate Limiting" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="100" y="123" width="100" height="25" as="geometry"/>
+                <mxCell id="waf-desc" value="WebACL&lt;br&gt;&amp;nbsp;Rate Limiting" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
+                    <mxGeometry x="120" y="148" width="100" height="25" as="geometry"/>
                 </mxCell>
                 <mxCell id="cf-dashboard" value="CloudFront&lt;br&gt;(Dashboard)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="30" y="178" width="50" height="50" as="geometry"/>
+                    <mxGeometry x="47.5" y="79" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="cf-dash-desc" value="dashboard.domain.com&lt;br&gt;X-Custom-Secret" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry y="261.5" width="110" height="25" as="geometry"/>
+                    <mxGeometry x="30" y="261.5" width="110" height="25" as="geometry"/>
                 </mxCell>
                 <mxCell id="lambda-edge" value="Lambda@Edge&lt;br&gt;(Viewer Request)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="215" y="343" width="50" height="50" as="geometry"/>
+                    <mxGeometry x="235" y="343" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="lambda-edge-desc" value="Cognito OAuth auth&lt;br&gt;Injects X-Auth-User" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="-10" y="590" width="130" height="25" as="geometry"/>
+                    <mxGeometry x="10" y="590" width="130" height="25" as="geometry"/>
                 </mxCell>
                 <mxCell id="9" style="edgeStyle=none;html=1;strokeColor=#C7131F;dashed=1;startArrow=classic;startFill=1;" edge="1" parent="edge-zone" source="cognito" target="cf-dashboard">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="cognito" value="Cognito" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cognito;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="30" y="520" width="50" height="50" as="geometry"/>
+                    <mxGeometry x="50" y="520" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="cognito-desc" value="User Pool + Hosted UI&lt;br&gt;2 App Clients (Dashboard + DevEnv)&lt;br&gt;Custom Attrs: subdomain,&lt;br&gt;security_policy, resource_tier, dept" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="120" y="433" width="240" height="50" as="geometry"/>
+                    <mxGeometry x="140" y="420" width="240" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="e-lambda-cognito" value="" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;" parent="edge-zone" source="lambda-edge" target="cognito" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e-waf-cfdash" value="WebACL" style="endArrow=none;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;fontSize=8;fontFamily=Amazon Ember;fontColor=#C7131F;startArrow=none;" parent="edge-zone" source="waf" target="cf-dashboard" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
+                <mxCell id="e-waf-cfdash" value="" style="endArrow=none;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;fontSize=8;fontFamily=Amazon Ember;fontColor=#C7131F;startArrow=none;" parent="edge-zone" source="waf" target="cf-dashboard" edge="1">
+                    <mxGeometry x="1" y="138" relative="1" as="geometry">
+                        <mxPoint x="-43" y="36" as="offset"/>
+                    </mxGeometry>
                 </mxCell>
                 <mxCell id="cf-devenv" value="CloudFront&lt;br&gt;(DevEnv)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;fontFamily=Amazon Ember;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="215" y="178" width="50" height="50" as="geometry"/>
+                    <mxGeometry x="232.5" y="79" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="e-cf-devenv-lambda" value="" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=1;strokeColor=#D05C17;dashed=1;" parent="edge-zone" source="cf-devenv" target="lambda-edge" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e-waf-cfdev" value="WebACL" style="endArrow=none;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;fontSize=8;fontFamily=Amazon Ember;fontColor=#C7131F;startArrow=none;" parent="edge-zone" source="waf" target="cf-devenv" edge="1">
+                <mxCell id="e-waf-cfdev" value="" style="endArrow=none;html=1;strokeWidth=1;strokeColor=#C7131F;dashed=1;fontSize=8;fontFamily=Amazon Ember;fontColor=#C7131F;startArrow=none;" parent="edge-zone" source="waf" target="cf-devenv" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="cf-devenv-desc" value="*.dev.domain.com" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="edge-zone" vertex="1">
-                    <mxGeometry x="190" y="265" width="110" height="18" as="geometry"/>
+                    <mxGeometry x="205" y="265" width="110" height="18" as="geometry"/>
                 </mxCell>
                 <mxCell id="aws-cloud" value="AWS Cloud (ap-northeast-2)" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=14;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;fontFamily=Amazon Ember;dashed=0;" parent="1" vertex="1">
                     <mxGeometry x="760" y="100" width="1520" height="1200" as="geometry"/>
@@ -128,7 +130,7 @@
                     <mxGeometry x="830" y="40" width="260" height="240" as="geometry"/>
                 </mxCell>
                 <mxCell id="vpce-bedrock" value="Bedrock" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
-                    <mxGeometry x="20" y="215" width="40" height="40" as="geometry"/>
+                    <mxGeometry x="200" y="40" width="40" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="vpce-ssm" value="SSM" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
                     <mxGeometry x="110" y="40" width="40" height="40" as="geometry"/>
@@ -362,35 +364,37 @@
                 <mxCell id="flow-user-r53" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;" parent="1" source="user-admin" target="route53" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="550" y="205"/>
-                            <mxPoint x="550" y="270"/>
+                            <mxPoint x="555" y="185"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="flow-user-dev-r53" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;" parent="1" source="user-dev" target="route53" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="550" y="335"/>
-                            <mxPoint x="550" y="270"/>
+                            <mxPoint x="555" y="185"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="flow-r53-cf-dash" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="route53" target="cf-dashboard">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="630" y="440"/>
-                            <mxPoint x="445" y="440"/>
+                            <mxPoint x="555" y="440"/>
+                            <mxPoint x="465" y="440"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="flow-r53-cf-dev" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#D05C17;edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="route53" target="cf-devenv">
-                    <mxGeometry relative="1" as="geometry"/>
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="555" y="440"/>
+                            <mxPoint x="650" y="440"/>
+                        </Array>
+                    </mxGeometry>
                 </mxCell>
                 <mxCell id="flow-cf-nlb" value="DevEnv traffic" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#D05C17;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=10;fontFamily=Amazon Ember;fontColor=#D05C17;" parent="1" source="cf-devenv" target="nlb" edge="1">
                     <mxGeometry x="-0.024" relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="650" y="610"/>
-                            <mxPoint x="770" y="610"/>
+                            <mxPoint x="770" y="604"/>
                             <mxPoint x="770" y="340"/>
                             <mxPoint x="1200" y="340"/>
                             <mxPoint x="1200" y="265"/>
@@ -402,9 +406,8 @@
                 <mxCell id="flow-cf-alb" value="Dashboard traffic" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=10;fontFamily=Amazon Ember;fontColor=#5A30B5;startArrow=none;" parent="1" source="cf-dashboard" target="alb" edge="1">
                     <mxGeometry x="0.8162" y="5" relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="600" y="665"/>
-                            <mxPoint x="600" y="580"/>
-                            <mxPoint x="740" y="580"/>
+                            <mxPoint x="463" y="690"/>
+                            <mxPoint x="740" y="690"/>
                             <mxPoint x="740" y="265"/>
                         </Array>
                         <mxPoint as="offset"/>
@@ -413,7 +416,8 @@
                 <mxCell id="flow-ec2-bedrock" value="Bedrock API (VPC Endpoint)" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#116D5B;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;fontFamily=Amazon Ember;fontColor=#116D5B;dashed=0;" parent="1" source="claude-code" target="bedrock" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="1960" y="830"/>
+                            <mxPoint x="1020" y="870"/>
+                            <mxPoint x="1960" y="870"/>
                             <mxPoint x="1960" y="225"/>
                         </Array>
                     </mxGeometry>
@@ -421,8 +425,8 @@
                 <mxCell id="flow-dash-ddb" value="" style="endArrow=classic;startArrow=classic;html=1;strokeWidth=1;strokeColor=#3334B9;edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;" parent="1" source="dash-ecs-task" target="dynamodb" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="905" y="440"/>
-                            <mxPoint x="1950" y="440"/>
+                            <mxPoint x="905" y="690"/>
+                            <mxPoint x="1950" y="690"/>
                             <mxPoint x="1950" y="330"/>
                         </Array>
                     </mxGeometry>
