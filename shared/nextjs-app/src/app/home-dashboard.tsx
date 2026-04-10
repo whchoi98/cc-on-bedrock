@@ -95,7 +95,6 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
   const fetchData = useCallback(async () => {
     try {
       setRefreshing(true);
-      // Admin-only APIs: only fetch for admin users
       const fetches: Promise<Response>[] = [
         fetch("/api/health"),
       ];
@@ -105,6 +104,10 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
           fetch("/api/container-metrics?action=current"),
           fetch("/api/usage?action=total_spend"),
         );
+      } else {
+        // Non-admin: fetch own usage
+        const today = new Date().toISOString().split("T")[0];
+        fetches.push(fetch(`/api/user/usage?date=${today}`));
       }
 
       const responses = await Promise.all(fetches);
@@ -122,6 +125,12 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         totalTokens = usage.data?.totalTokens ?? 0;
         totalCost = usage.data?.totalCost ?? 0;
         cwData = cw.success ? cw.data : null;
+      } else if (!isAdmin && responses.length > 1) {
+        const userUsage = await responses[1].json();
+        if (userUsage.success) {
+          totalTokens = userUsage.data?.totalTokens ?? 0;
+          totalCost = userUsage.data?.estimatedCost ?? 0;
+        }
       }
 
       setData({
@@ -195,27 +204,34 @@ export default function HomeDashboard({ isAdmin }: HomeDashboardProps) {
         <StatCard
           title={t("home.totalCost")}
           value={formatCost(data.totalCost)}
-          description="Accumulated Platform Spend"
-          trend={{ value: 12.5, isPositive: false }}
+          description={isAdmin ? "Accumulated Platform Spend" : "Your Today's Spend"}
         />
         <StatCard
           title={t("home.totalTokens")}
           value={formatNum(data.totalTokens)}
-          description="Aggregated Model Interaction"
-          trend={{ value: 8.2, isPositive: true }}
+          description={isAdmin ? "Aggregated Model Interaction" : "Your Today's Tokens"}
         />
-        <StatCard
-          title={t("home.activeContainers")}
-          value={data.activeContainers.toString()}
-          description="Running EC2 Instances"
-          trend={{ value: 4.1, isPositive: true }}
-        />
-        <StatCard
-          title="Cluster Health"
-          value="99.9%"
-          description="High Availability Metric"
-          trend={{ value: 0.1, isPositive: true }}
-        />
+        {isAdmin && (
+          <StatCard
+            title={t("home.activeContainers")}
+            value={data.activeContainers.toString()}
+            description="Running EC2 Instances"
+          />
+        )}
+        {isAdmin && data.cwMetrics && (
+          <StatCard
+            title="Cluster CPU"
+            value={`${data.cwMetrics.avgCpu?.toFixed(1) ?? "0"}%`}
+            description={`${data.activeContainers} instances`}
+          />
+        )}
+        {!isAdmin && (
+          <StatCard
+            title={t("home.activeContainers")}
+            value={data.activeContainers > 0 ? "Running" : "Stopped"}
+            description="Your Instance Status"
+          />
+        )}
       </div>
 
       {/* Quick Links Section */}

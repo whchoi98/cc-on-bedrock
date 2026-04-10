@@ -25,6 +25,8 @@ dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 ecs_client = boto3.client("ecs")
 ec2_client = boto3.client("ec2")
+cognito_client = boto3.client("cognito-idp")
+USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 
 # Bedrock pricing (ap-northeast-2, per 1M tokens)
 PRICING = {
@@ -43,9 +45,13 @@ _dept_cache: dict = {}
 
 
 def _resolve_department(subdomain: str) -> str:
-    """Resolve department from EC2 instance tags for a user subdomain."""
+    """Resolve department for a user subdomain.
+    Priority: 1) EC2 instance tag 2) Cognito custom:department 3) "default"
+    """
     if subdomain in _dept_cache:
         return _dept_cache[subdomain]
+
+    # Try EC2 instance tags first (fastest, works for running instances)
     try:
         resp = ec2_client.describe_instances(
             Filters=[
@@ -57,11 +63,29 @@ def _resolve_department(subdomain: str) -> str:
         for reservation in resp.get("Reservations", []):
             for inst in reservation.get("Instances", []):
                 tags = {t["Key"]: t["Value"] for t in inst.get("Tags", [])}
-                dept = tags.get("department", "default")
-                _dept_cache[subdomain] = dept
-                return dept
+                dept = tags.get("department", "")
+                if dept and dept != "default":
+                    _dept_cache[subdomain] = dept
+                    return dept
     except Exception as e:
         print(f"EC2 tag lookup failed for {subdomain}: {e}")
+
+    # Fallback: Cognito custom:department (works even if instance is stopped)
+    if USER_POOL_ID:
+        try:
+            resp = cognito_client.list_users(
+                UserPoolId=USER_POOL_ID,
+                Filter=f'username = "{subdomain}"',
+                Limit=1,
+            )
+            for user in resp.get("Users", []):
+                attrs = {a["Name"]: a["Value"] for a in user.get("Attributes", [])}
+                dept = attrs.get("custom:department", "default")
+                _dept_cache[subdomain] = dept
+                return dept
+        except Exception as e:
+            print(f"Cognito lookup failed for {subdomain}: {e}")
+
     _dept_cache[subdomain] = "default"
     return "default"
 
