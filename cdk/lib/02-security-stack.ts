@@ -198,6 +198,18 @@ export class SecurityStack extends cdk.Stack {
           actions: ['secretsmanager:GetSecretValue'],
           resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
         }),
+        new iam.PolicyStatement({
+          sid: 'AgentCoreGateway',
+          actions: ['bedrock-agentcore:InvokeGateway'],
+          resources: [`arn:aws:bedrock-agentcore:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:gateway/*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'DynamoDbMcpConfig',
+          actions: ['dynamodb:GetItem', 'dynamodb:Query'],
+          resources: [
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dept-mcp-config`,
+          ],
+        }),
       ],
     });
 
@@ -278,107 +290,92 @@ export class SecurityStack extends cdk.Stack {
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-infrastructure`,
       ],
     }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'IamTaskRoleManagement',
-      actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:TagRole', 'iam:DeleteRole'],
-      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
-      conditions: {
-        StringEquals: {
-          'iam:PermissionsBoundary': this.taskPermissionBoundary.managedPolicyArn,
-        },
-      },
-    }));
-    // Allow GetRole without boundary condition (needed to check if role exists)
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'IamTaskRoleRead',
-      actions: ['iam:GetRole'],
-      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
-    }));
-    // Secrets Manager: per-user code-server passwords
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'SecretsManagerCodeserver',
-      actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:UpdateSecret', 'secretsmanager:GetSecretValue'],
-      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/codeserver/*`],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'DynamoDBAccess',
-      actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:BatchGetItem'],
-      resources: [
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage/*`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-department-budgets`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-department-budgets/*`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests/*`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-volumes`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-volumes/*`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets`,
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets/*`,
+    // Data & infra management — separate managed policy to avoid 10KB inline limit
+    const dataInfraPolicy = new iam.ManagedPolicy(this, 'DashboardDataInfraPolicy', {
+      managedPolicyName: 'cc-on-bedrock-dashboard-data-infra',
+      roles: [this.dashboardEc2Role],
+      statements: [
+        new iam.PolicyStatement({
+          sid: 'IamTaskRoleManagement',
+          actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:TagRole', 'iam:DeleteRole'],
+          resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'SecretsManagerCodeserver',
+          actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:UpdateSecret', 'secretsmanager:GetSecretValue'],
+          resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/codeserver/*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'DynamoDBAccess',
+          actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:BatchGetItem'],
+          resources: [
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage/*`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-department-budgets`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-volumes`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          sid: 'RoutingTableAccess',
+          actions: ['dynamodb:PutItem', 'dynamodb:DeleteItem'],
+          resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'EcsTaskDefRegistration',
+          actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition', 'ecs:DescribeClusters'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'LambdaInvoke',
+          actions: ['lambda:InvokeFunction'],
+          resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`],
+        }),
       ],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'RoutingTableAccess',
-      actions: ['dynamodb:PutItem', 'dynamodb:DeleteItem'],
-      resources: [
-        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
-      ],
-    }));
+    });
     this.encryptionKey.grantDecrypt(this.dashboardEc2Role);
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'EfsAccessPointManagement',
-      actions: [
-        'elasticfilesystem:CreateAccessPoint',
-        'elasticfilesystem:DescribeAccessPoints',
-        'elasticfilesystem:DeleteAccessPoint',
-      ],
-      resources: [`arn:aws:elasticfilesystem:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:file-system/*`],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'EcsTaskDefRegistration',
-      actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition', 'ecs:DescribeClusters'],
-      resources: ['*'],
-    }));
-    // Lambda invoke for EBS resize and other admin operations
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'LambdaInvoke',
-      actions: ['lambda:InvokeFunction'],
-      resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`],
-    }));
 
-    // EC2-per-user DevEnv management (computeMode: 'ec2')
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'Ec2DevenvInstances',
-      actions: [
-        'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
-        'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
-        'ec2:ModifyInstanceAttribute', 'ec2:ModifyNetworkInterfaceAttribute',
-        'ec2:ModifyVolume', 'ec2:DescribeVolumes',
+    // EC2-per-user DevEnv management — separate managed policy to avoid 10KB inline limit
+    const ec2DevenvPolicy = new iam.ManagedPolicy(this, 'DashboardEc2DevenvPolicy', {
+      managedPolicyName: 'cc-on-bedrock-dashboard-ec2-devenv',
+      roles: [this.dashboardEc2Role],
+      statements: [
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvInstances',
+          actions: [
+            'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
+            'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
+            'ec2:ModifyInstanceAttribute', 'ec2:ModifyNetworkInterfaceAttribute',
+            'ec2:ModifyVolume', 'ec2:DescribeVolumes',
+          ],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvDynamoDB',
+          actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
+          resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-instances`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvIamRoles',
+          actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:TagRole', 'iam:DeleteRole', 'iam:DeleteRolePolicy'],
+          resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvInstanceProfiles',
+          actions: ['iam:CreateInstanceProfile', 'iam:GetInstanceProfile', 'iam:AddRoleToInstanceProfile', 'iam:RemoveRoleFromInstanceProfile'],
+          resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvPassRole',
+          actions: ['iam:PassRole'],
+          resources: [
+            `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+            `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-devenv-instance`,
+          ],
+        }),
       ],
-      resources: ['*'],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'Ec2DevenvDynamoDB',
-      actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
-      resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-instances`],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'Ec2DevenvIamRoles',
-      actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:TagRole', 'iam:DeleteRole', 'iam:DeleteRolePolicy'],
-      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'Ec2DevenvInstanceProfiles',
-      actions: ['iam:CreateInstanceProfile', 'iam:GetInstanceProfile', 'iam:AddRoleToInstanceProfile', 'iam:RemoveRoleFromInstanceProfile'],
-      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'Ec2DevenvPassRole',
-      actions: ['iam:PassRole'],
-      resources: [
-        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
-        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-devenv-instance`,
-      ],
-    }));
+    });
 
     // Outputs
     new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId, exportName: 'cc-user-pool-id' });
