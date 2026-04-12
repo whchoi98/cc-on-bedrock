@@ -127,6 +127,7 @@ export async function POST(req: NextRequest) {
           department,
           securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
           resourceTier: tierToUse as "light" | "standard" | "power",
+          containerOs: (user.containerOs ?? "ubuntu") as "ubuntu" | "al2023",
         });
         send(3, "task_definition", "completed", { message: "Instance configured" });
         await delay(300);

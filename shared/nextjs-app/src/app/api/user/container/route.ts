@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
         desiredStatus: userInstance.status.toUpperCase(),
         username: userInstance.username,
         subdomain: userInstance.subdomain,
-        containerOs: "ubuntu",
+        containerOs: userInstance.containerOs ?? "ubuntu",
         resourceTier: userInstance.instanceType ?? "standard",
         securityPolicy: userInstance.securityPolicy,
         privateIp: userInstance.privateIp,
@@ -132,6 +132,7 @@ export async function POST(req: NextRequest) {
         department,
         securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
         resourceTier: tierToUse,
+        containerOs: (user.containerOs ?? "ubuntu") as "ubuntu" | "al2023",
       });
       return NextResponse.json({ success: true, data: { taskArn: result.instanceId } });
     }

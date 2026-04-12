@@ -47,6 +47,7 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
   const [monthlyUsage, setMonthlyUsage] = useState<MonthlyUsage[]>([]);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [mcpInfo, setMcpInfo] = useState<{ gatewayStatus: string; assignedMcps: string[]; lastSyncAt: string } | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,6 +76,7 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
           setBudget(deptData.data.budget ?? null);
           setPendingRequests(deptData.data.pendingRequests ?? []);
           setMonthlyUsage(deptData.data.monthlyUsage ?? []);
+          setMcpInfo(deptData.data.mcpInfo ?? null);
         }
       }
 
@@ -350,6 +352,38 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                 </div>
               </div>
             </div>
+
+            {/* MCP Gateway Status */}
+            {mcpInfo && (
+              <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold text-gray-100">MCP Gateway</h2>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                    mcpInfo.gatewayStatus === "ACTIVE" ? "bg-green-500/20 text-green-400"
+                    : mcpInfo.gatewayStatus === "FAILED" ? "bg-red-500/20 text-red-400"
+                    : "bg-yellow-500/20 text-yellow-400"
+                  }`}>
+                    {mcpInfo.gatewayStatus}
+                  </span>
+                </div>
+                {mcpInfo.assignedMcps.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {mcpInfo.assignedMcps.map((mcp) => (
+                      <span key={mcp} className="text-xs px-2 py-1 bg-gray-700/50 text-gray-300 rounded-md">
+                        {mcp}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">No MCP tools assigned</p>
+                )}
+                {mcpInfo.lastSyncAt && (
+                  <p className="text-xs text-gray-600 mt-3">
+                    Last sync: {new Date(mcpInfo.lastSyncAt).toLocaleString()}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Monthly Usage Chart */}
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">

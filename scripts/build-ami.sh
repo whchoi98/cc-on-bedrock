@@ -5,32 +5,53 @@ set -euo pipefail
 # Launches a temporary EC2 instance, runs setup scripts, creates AMI, terminates instance.
 # Must run from an environment with AWS credentials and VPC access.
 #
-# Usage: ./build-ami.sh [instance-type] [volume-size-gb]
-# Example: ./build-ami.sh t4g.medium 30
+# Usage: ./build-ami.sh [ubuntu|al2023] [instance-type] [volume-size-gb]
+# Example: ./build-ami.sh ubuntu t4g.medium 30
+# Example: ./build-ami.sh al2023 t4g.medium 30
 
-INSTANCE_TYPE="${1:-t4g.medium}"
-VOLUME_SIZE="${2:-30}"
+OS_TYPE="${1:-ubuntu}"
+INSTANCE_TYPE="${2:-t4g.medium}"
+VOLUME_SIZE="${3:-30}"
 REGION="${AWS_REGION:-ap-northeast-2}"
-AMI_NAME="cc-on-bedrock-devenv-$(date +%Y%m%d-%H%M%S)"
+AMI_NAME="cc-on-bedrock-devenv-${OS_TYPE}-$(date +%Y%m%d-%H%M%S)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+if [[ "$OS_TYPE" != "ubuntu" && "$OS_TYPE" != "al2023" ]]; then
+  echo "ERROR: OS type must be 'ubuntu' or 'al2023'"
+  echo "Usage: $0 [ubuntu|al2023] [instance-type] [volume-size-gb]"
+  exit 1
+fi
+
 echo "=== CC-on-Bedrock AMI Builder ==="
+echo "OS type: $OS_TYPE"
 echo "Instance type: $INSTANCE_TYPE"
 echo "Volume size: ${VOLUME_SIZE}GB"
 echo "Region: $REGION"
 
-# Find latest Ubuntu 24.04 ARM64 AMI
-echo "Finding base AMI..."
-BASE_AMI=$(aws ec2 describe-images \
-  --owners 099720109477 \
-  --filters \
-    "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*" \
-    "Name=architecture,Values=arm64" \
-    "Name=state,Values=available" \
-  --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
-  --output text \
-  --region "$REGION")
+# Find base AMI based on OS type
+echo "Finding base AMI for $OS_TYPE..."
+if [ "$OS_TYPE" = "ubuntu" ]; then
+  BASE_AMI=$(aws ec2 describe-images \
+    --owners 099720109477 \
+    --filters \
+      "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*" \
+      "Name=architecture,Values=arm64" \
+      "Name=state,Values=available" \
+    --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+    --output text \
+    --region "$REGION")
+else
+  BASE_AMI=$(aws ec2 describe-images \
+    --owners amazon \
+    --filters \
+      "Name=name,Values=al2023-ami-*-arm64" \
+      "Name=architecture,Values=arm64" \
+      "Name=state,Values=available" \
+    --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+    --output text \
+    --region "$REGION")
+fi
 echo "Base AMI: $BASE_AMI"
 
 # Find a private subnet
@@ -166,76 +187,94 @@ run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-claude-code.sh"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-kiro.sh"
 
 # Install SSM agent + CloudWatch agent + code-server systemd service
-echo "Running EC2-specific setup..."
-COMMAND_ID=$(aws ssm send-command \
-  --instance-ids "$INSTANCE_ID" \
-  --document-name "AWS-RunShellScript" \
-  --parameters 'commands=[
-    "# SSM agent is pre-installed on Ubuntu AMI",
-    "# Install CloudWatch Agent",
-    "wget -q https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/cw-agent.deb",
-    "dpkg -i /tmp/cw-agent.deb && rm /tmp/cw-agent.deb",
-    "# Configure CloudWatch Agent for memory and disk metrics",
-    "mkdir -p /opt/aws/amazon-cloudwatch-agent/etc",
-    "cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCFG",
-    "{",
-    "  \"metrics\": {",
-    "    \"namespace\": \"CWAgent\",",
-    "    \"append_dimensions\": { \"InstanceId\": \"${aws:InstanceId}\" },",
-    "    \"aggregation_dimensions\": [[\"InstanceId\"]],",
-    "    \"metrics_collected\": {",
-    "      \"mem\": {",
-    "        \"measurement\": [\"mem_used_percent\", \"mem_used\", \"mem_total\"],",
-    "        \"metrics_collection_interval\": 60",
-    "      },",
-    "      \"disk\": {",
-    "        \"measurement\": [\"disk_used_percent\", \"disk_used\", \"disk_total\"],",
-    "        \"resources\": [\"/\"],",
-    "        \"metrics_collection_interval\": 60",
-    "      }",
-    "    }",
-    "  }",
-    "}",
-    "CWCFG",
-    "systemctl enable amazon-cloudwatch-agent",
-    "# Remove PEP 668 restriction",
-    "rm -f /usr/lib/python3*/EXTERNALLY-MANAGED",
-    "# code-server systemd service",
-    "cat > /etc/systemd/system/code-server.service << EOF",
-    "[Unit]",
-    "Description=code-server",
-    "After=network.target",
-    "",
-    "[Service]",
-    "Type=simple",
-    "User=coder",
-    "Environment=CLAUDE_CODE_USE_BEDROCK=1",
-    "ExecStart=/usr/bin/code-server --bind-addr 0.0.0.0:8080 --auth password",
-    "Restart=always",
-    "RestartSec=5",
-    "",
-    "[Install]",
-    "WantedBy=multi-user.target",
-    "EOF",
-    "systemctl daemon-reload",
-    "# Pre-create code-server config with 0.0.0.0 binding",
-    "sudo -u coder mkdir -p /home/coder/.config/code-server /home/coder/workspace",
-    "cat > /home/coder/.config/code-server/config.yaml << CSCFG",
-    "bind-addr: 0.0.0.0:8080",
-    "auth: password",
-    "password: changeme",
-    "cert: false",
-    "CSCFG",
-    "chown -R coder:coder /home/coder/.config /home/coder/workspace",
-    "systemctl enable code-server",
-    "# Cleanup",
-    "apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*",
-    "echo AMI setup complete"
-  ]' \
-  --timeout-seconds 300 \
-  --query 'Command.CommandId' \
-  --output text \
-  --region "$REGION")
+echo "Running EC2-specific setup for $OS_TYPE..."
+
+# Build EC2-specific setup script (OS-aware)
+EC2_SETUP_SCRIPT=$(mktemp)
+cat > "$EC2_SETUP_SCRIPT" << 'SETUP_COMMON'
+#!/bin/bash
+set -euo pipefail
+export HOME=/root
+
+# Detect OS
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+fi
+
+# Install CloudWatch Agent
+if command -v apt-get &>/dev/null; then
+  wget -q https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/cw-agent.deb
+  dpkg -i /tmp/cw-agent.deb && rm /tmp/cw-agent.deb
+  rm -f /usr/lib/python3*/EXTERNALLY-MANAGED
+else
+  dnf install -y amazon-cloudwatch-agent
+fi
+
+# Configure CloudWatch Agent
+mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCFG'
+{
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}" },
+    "aggregation_dimensions": [["InstanceId"]],
+    "metrics_collected": {
+      "mem": {
+        "measurement": ["mem_used_percent", "mem_used", "mem_total"],
+        "metrics_collection_interval": 60
+      },
+      "disk": {
+        "measurement": ["disk_used_percent", "disk_used", "disk_total"],
+        "resources": ["/"],
+        "metrics_collection_interval": 60
+      }
+    }
+  }
+}
+CWCFG
+systemctl enable amazon-cloudwatch-agent
+
+# code-server systemd service
+cat > /etc/systemd/system/code-server.service << 'EOF'
+[Unit]
+Description=code-server
+After=network.target
+
+[Service]
+Type=simple
+User=coder
+Environment=CLAUDE_CODE_USE_BEDROCK=1
+ExecStart=/usr/bin/code-server --bind-addr 0.0.0.0:8080 --auth password
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+
+# Pre-create code-server config
+sudo -u coder mkdir -p /home/coder/.config/code-server /home/coder/workspace
+cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'
+bind-addr: 0.0.0.0:8080
+auth: password
+password: changeme
+cert: false
+CSCFG
+chown -R coder:coder /home/coder/.config /home/coder/workspace
+systemctl enable code-server
+
+# Cleanup
+if command -v apt-get &>/dev/null; then
+  apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
+else
+  dnf clean all && rm -rf /tmp/*
+fi
+echo "AMI EC2 setup complete"
+SETUP_COMMON
+
+run_script "$EC2_SETUP_SCRIPT"
+rm -f "$EC2_SETUP_SCRIPT"
 
 aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
 
@@ -246,11 +285,17 @@ aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID" --region "$REGION"
 
 # Create AMI
 echo "Creating AMI: $AMI_NAME..."
+if [ "$OS_TYPE" = "ubuntu" ]; then
+  AMI_DESC="CC-on-Bedrock DevEnv: Ubuntu 24.04 ARM64 + code-server + Claude Code + Kiro"
+else
+  AMI_DESC="CC-on-Bedrock DevEnv: Amazon Linux 2023 ARM64 + code-server + Claude Code + Kiro"
+fi
+
 AMI_ID=$(aws ec2 create-image \
   --instance-id "$INSTANCE_ID" \
   --name "$AMI_NAME" \
-  --description "CC-on-Bedrock DevEnv: Ubuntu 24.04 ARM64 + code-server + Claude Code + Kiro" \
-  --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$AMI_NAME},{Key=managed_by,Value=cc-on-bedrock}]" \
+  --description "$AMI_DESC" \
+  --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$AMI_NAME},{Key=managed_by,Value=cc-on-bedrock},{Key=os_type,Value=$OS_TYPE}]" \
   --query 'ImageId' \
   --output text \
   --region "$REGION")
@@ -259,20 +304,32 @@ echo "AMI ID: $AMI_ID"
 echo "Waiting for AMI to be available..."
 aws ec2 wait image-available --image-ids "$AMI_ID" --region "$REGION"
 
-# Store AMI ID in SSM Parameter Store
+# Store AMI ID in per-OS SSM Parameter
 aws ssm put-parameter \
-  --name "/cc-on-bedrock/devenv/ami-id" \
+  --name "/cc-on-bedrock/devenv/ami-id/${OS_TYPE}" \
   --value "$AMI_ID" \
   --type String \
   --overwrite \
   --region "$REGION"
-echo "AMI ID stored in SSM: /cc-on-bedrock/devenv/ami-id"
+echo "AMI ID stored in SSM: /cc-on-bedrock/devenv/ami-id/${OS_TYPE}"
+
+# Also update legacy single parameter for backward compatibility (ubuntu only)
+if [ "$OS_TYPE" = "ubuntu" ]; then
+  aws ssm put-parameter \
+    --name "/cc-on-bedrock/devenv/ami-id" \
+    --value "$AMI_ID" \
+    --type String \
+    --overwrite \
+    --region "$REGION"
+  echo "Legacy SSM also updated: /cc-on-bedrock/devenv/ami-id"
+fi
 
 # Terminate build instance
 echo "Terminating build instance..."
 aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION"
 
 echo "=== AMI Build Complete ==="
+echo "OS Type: $OS_TYPE"
 echo "AMI ID: $AMI_ID"
 echo "AMI Name: $AMI_NAME"
-echo "SSM Parameter: /cc-on-bedrock/devenv/ami-id"
+echo "SSM Parameter: /cc-on-bedrock/devenv/ami-id/${OS_TYPE}"

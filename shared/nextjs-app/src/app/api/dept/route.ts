@@ -186,6 +186,40 @@ export async function GET(req: NextRequest) {
       status: m.status,
     }));
 
+    // Fetch MCP gateway info for the department
+    let mcpInfo: { gatewayStatus: string; assignedMcps: string[]; lastSyncAt: string } | null = null;
+    try {
+      if (department !== "all") {
+        const DEPT_MCP_CONFIG_TABLE = process.env.DEPT_MCP_CONFIG_TABLE ?? "cc-dept-mcp-config";
+        const gwResult = await dynamodb.send(new QueryCommand({
+          TableName: DEPT_MCP_CONFIG_TABLE,
+          KeyConditionExpression: "PK = :pk AND SK = :sk",
+          ExpressionAttributeValues: marshall({ ":pk": `DEPT#${department}`, ":sk": "GATEWAY" }),
+        }));
+        if (gwResult.Items?.length) {
+          const gw = unmarshall(gwResult.Items[0]);
+          // Get assigned MCPs
+          const mcpResult = await dynamodb.send(new QueryCommand({
+            TableName: DEPT_MCP_CONFIG_TABLE,
+            KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+            ExpressionAttributeValues: marshall({ ":pk": `DEPT#${department}`, ":prefix": "MCP#" }),
+          }));
+          const assignedMcps = (mcpResult.Items ?? [])
+            .map((item) => unmarshall(item))
+            .filter((item) => item.enabled !== false)
+            .map((item) => (item.SK as string).replace("MCP#", ""));
+
+          mcpInfo = {
+            gatewayStatus: gw.status ?? "UNKNOWN",
+            assignedMcps,
+            lastSyncAt: gw.lastSyncAt ?? "",
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("[dept] MCP info fetch error:", err);
+    }
+
     return NextResponse.json({
       success: true,
       data: {
@@ -194,6 +228,7 @@ export async function GET(req: NextRequest) {
         budget,
         pendingRequests,
         monthlyUsage,
+        mcpInfo,
       },
     });
   } catch (err) {

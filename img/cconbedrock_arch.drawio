@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="cc-on-bedrock-arch" name="CC-on-Bedrock Enterprise Architecture">
-        <mxGraphModel dx="1517" dy="1111" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="3200" pageHeight="2000" background="#FFFFFF" math="0" shadow="0">
+        <mxGraphModel dx="1517" dy="1111" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3200" pageHeight="1800" background="#FFFFFF" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -79,7 +79,7 @@
                     <mxGeometry x="205" y="265" width="110" height="18" as="geometry"/>
                 </mxCell>
                 <mxCell id="aws-cloud" value="AWS Cloud (ap-northeast-2)" style="points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=14;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;fontFamily=Amazon Ember;dashed=0;" parent="1" vertex="1">
-                    <mxGeometry x="760" y="100" width="1520" height="1200" as="geometry"/>
+                    <mxGeometry x="760" y="100" width="1520" height="1500" as="geometry"/>
                 </mxCell>
                 <mxCell id="vpc" value="VPC (10.x.0.0/16)" style="sketch=0;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=13;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_vpc;strokeColor=#879196;fillColor=none;verticalAlign=top;align=left;spacingLeft=30;fontColor=#879196;fontFamily=Amazon Ember;dashed=0;" parent="aws-cloud" vertex="1">
                     <mxGeometry x="30" y="45" width="1150" height="895" as="geometry"/>
@@ -227,7 +227,7 @@
                     <mxGeometry x="570" y="95" width="50" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="svc-zone" value="AWS Managed Services" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#FF9900;strokeWidth=2;fontFamily=Amazon Ember;fontSize=13;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#FF9900;container=1;collapsible=0;recursiveResize=0;" parent="aws-cloud" vertex="1">
-                    <mxGeometry x="1210" y="45" width="290" height="1135" as="geometry"/>
+                    <mxGeometry x="1210" y="45" width="290" height="1435" as="geometry"/>
                 </mxCell>
                 <mxCell id="bedrock" value="Amazon Bedrock" style="shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;imageAspect=0;image=https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/dark/bedrock-color.png;fontFamily=Amazon Ember;fontSize=10;fontStyle=0;fontColor=#232F3E;html=1;" parent="svc-zone" vertex="1">
                     <mxGeometry x="40" y="55" width="50" height="50" as="geometry"/>
@@ -241,8 +241,8 @@
                 <mxCell id="dynamodb" value="DynamoDB" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
                     <mxGeometry x="40" y="163" width="50" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="ddb-tables" value="Tables:&lt;br&gt;- cc-routing-table&lt;br&gt;- cc-user-instances&lt;br&gt;- cc-on-bedrock-usage&lt;br&gt;- cc-department-budgets&lt;br&gt;- cc-approval-requests" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
-                    <mxGeometry x="110" y="150" width="180" height="85" as="geometry"/>
+                <mxCell id="ddb-tables" value="Tables:&lt;br&gt;- cc-routing-table&lt;br&gt;- cc-user-instances&lt;br&gt;- cc-on-bedrock-usage&lt;br&gt;- cc-department-budgets&lt;br&gt;- cc-approval-requests&lt;br&gt;- cc-mcp-catalog&lt;br&gt;- cc-dept-mcp-config" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
+                    <mxGeometry x="110" y="150" width="180" height="110" as="geometry"/>
                 </mxCell>
                 <mxCell id="secrets-mgr" value="Secrets Manager" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F54749;gradientDirection=north;fillColor=#C7131F;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
                     <mxGeometry x="40" y="593" width="50" height="50" as="geometry"/>
@@ -432,7 +432,7 @@
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="legend" value="Legend" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#5A6C86;strokeWidth=1;fontFamily=Amazon Ember;fontSize=12;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#5A6C86;container=1;collapsible=0;recursiveResize=0;" parent="1" vertex="1">
-                    <mxGeometry x="2320" y="100" width="290" height="700" as="geometry"/>
+                    <mxGeometry x="2320" y="100" width="290" height="760" as="geometry"/>
                 </mxCell>
                 <mxCell id="leg-compute" value="" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ec2;fontFamily=Amazon Ember;" parent="legend" vertex="1">
                     <mxGeometry x="15" y="35" width="30" height="30" as="geometry"/>
@@ -538,6 +538,83 @@
                 </mxCell>
                 <mxCell id="leg-routing-txt" value="Routing Pipeline" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
                     <mxGeometry x="80" y="640" width="115" height="24" as="geometry"/>
+                </mxCell>
+                <!-- AgentCore MCP Gateway in Managed Services -->
+                <mxCell id="agentcore-gw" value="AgentCore&lt;br&gt;Gateway" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=10;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
+                    <mxGeometry x="40" y="1130" width="50" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="agentcore-gw-desc" value="Common + Per-Dept&lt;br&gt;MCP Lambda Targets&lt;br&gt;SigV4 Auth" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=8;fontColor=#545B64;" parent="svc-zone" vertex="1">
+                    <mxGeometry x="110" y="1130" width="140" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="sqs-gw-dlq" value="SQS (DLQ)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.sqs;fontFamily=Amazon Ember;" parent="svc-zone" vertex="1">
+                    <mxGeometry x="40" y="1250" width="50" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="sqs-gw-dlq-desc" value="Gateway Manager DLQ" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=9;fontColor=#545B64;" parent="svc-zone" vertex="1">
+                    <mxGeometry x="110" y="1264" width="140" height="22" as="geometry"/>
+                </mxCell>
+                <!-- VPC Endpoint for AgentCore -->
+                <mxCell id="vpce-agentcore" value="AgentCore" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=9;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.privatelink;fontFamily=Amazon Ember;" parent="vpce-box" vertex="1">
+                    <mxGeometry x="200" y="120" width="40" height="40" as="geometry"/>
+                </mxCell>
+                <!-- MCP Gateway Lifecycle Pipeline -->
+                <mxCell id="mcp-gw-zone" value="MCP Gateway Lifecycle" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#5A30B5;strokeWidth=1;fontFamily=Amazon Ember;fontSize=12;fontStyle=1;verticalAlign=top;spacingTop=10;spacingLeft=12;fontColor=#5A30B5;container=1;collapsible=0;recursiveResize=0;" parent="aws-cloud" vertex="1">
+                    <mxGeometry x="30" y="1190" width="1100" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="mcp-ddb-config" value="DDB (mcp-config)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fontFamily=Amazon Ember;" parent="mcp-gw-zone" vertex="1">
+                    <mxGeometry x="30" y="30" width="40" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="mcp-ddb-streams" value="Streams" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb_stream;fontFamily=Amazon Ember;" parent="mcp-gw-zone" vertex="1">
+                    <mxGeometry x="204" y="30" width="40" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="lambda-gw-mgr" value="Lambda (gateway-mgr)" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Amazon Ember;" parent="mcp-gw-zone" vertex="1">
+                    <mxGeometry x="378" y="30" width="40" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="mcp-agentcore-api" value="AgentCore API" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#945DF2;gradientDirection=north;fillColor=#5A30B5;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;fontFamily=Amazon Ember;" parent="mcp-gw-zone" vertex="1">
+                    <mxGeometry x="552" y="30" width="40" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="mcp-lambda-targets" value="MCP Lambda Targets" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F78E04;gradientDirection=north;fillColor=#D05C17;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;fontFamily=Amazon Ember;" parent="mcp-gw-zone" vertex="1">
+                    <mxGeometry x="726" y="30" width="40" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="mcp-sqs-dlq" value="SQS DLQ" style="sketch=0;outlineConnect=0;fontColor=#232F3E;gradientColor=#F34482;gradientDirection=north;fillColor=#BC1356;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=8;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.sqs;fontFamily=Amazon Ember;" parent="mcp-gw-zone" vertex="1">
+                    <mxGeometry x="900" y="30" width="40" height="40" as="geometry"/>
+                </mxCell>
+                <!-- MCP Pipeline Edges -->
+                <mxCell id="e-mcp-cfg-str" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;" parent="mcp-gw-zone" source="mcp-ddb-config" target="mcp-ddb-streams" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e-mcp-str-lam" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;" parent="mcp-gw-zone" source="mcp-ddb-streams" target="lambda-gw-mgr" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e-mcp-lam-ac" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;" parent="mcp-gw-zone" source="lambda-gw-mgr" target="mcp-agentcore-api" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e-mcp-ac-tgt" value="" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;" parent="mcp-gw-zone" source="mcp-agentcore-api" target="mcp-lambda-targets" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e-mcp-lam-dlq" value="" style="endArrow=classic;html=1;strokeWidth=1;strokeColor=#BC1356;dashed=1;" parent="mcp-gw-zone" source="lambda-gw-mgr" target="mcp-sqs-dlq" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mcp-pipeline-desc" value="Admin assigns MCP &amp;rarr; DDB Streams &amp;rarr; Lambda (gateway-manager) &amp;rarr; AgentCore Gateway CRUD &amp;rarr; Lambda Targets registered | DLQ for failures" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=10;fontColor=#5A30B5;" parent="mcp-gw-zone" vertex="1">
+                    <mxGeometry x="30" y="85" width="1000" height="15" as="geometry"/>
+                </mxCell>
+                <!-- Flow: EC2 → AgentCore Gateway (via VPCE) -->
+                <mxCell id="flow-ec2-agentcore" value="MCP via AgentCore&lt;br&gt;(VPCE + SigV4)" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#5A30B5;edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;fontFamily=Amazon Ember;fontColor=#5A30B5;dashed=0;" parent="1" source="claude-code" target="agentcore-gw" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1020" y="920"/>
+                            <mxPoint x="2035" y="920"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <!-- Legend: AgentCore MCP Flow -->
+                <mxCell id="leg-agentcore-arrow" value="" style="endArrow=classic;html=1;rounded=0;strokeWidth=2;strokeColor=#5A30B5;" parent="legend" edge="1">
+                    <mxGeometry x="15" y="465" width="20" relative="1" as="geometry">
+                        <mxPoint x="15" y="692" as="sourcePoint"/>
+                        <mxPoint x="55" y="692" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="leg-agentcore-txt" value="AgentCore MCP Flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Amazon Ember;fontSize=14;fontColor=#545B64;" parent="legend" vertex="1">
+                    <mxGeometry x="80" y="680" width="160" height="24" as="geometry"/>
                 </mxCell>
             </root>
         </mxGraphModel>

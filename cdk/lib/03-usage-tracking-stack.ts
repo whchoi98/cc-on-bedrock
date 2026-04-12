@@ -10,6 +10,8 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as logsDest from 'aws-cdk-lib/aws-logs-destinations';
 import * as cr from 'aws-cdk-lib/custom-resources';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 import * as path from 'path';
@@ -396,6 +398,118 @@ export class UsageTrackingStack extends cdk.Stack {
       indexName: 'department-status-index',
       partitionKey: { name: 'department', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+    });
+
+    // ==================== MCP Gateway Management ====================
+
+    // MCP Catalog table — available MCP tools that Admin can assign to departments
+    const mcpCatalogTable = new dynamodb.Table(this, 'McpCatalogTable', {
+      tableName: 'cc-mcp-catalog',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Department MCP Config table — per-department Gateway state + MCP assignments
+    const deptMcpConfigTable = new dynamodb.Table(this, 'DeptMcpConfigTable', {
+      tableName: 'cc-dept-mcp-config',
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+    });
+
+    // DLQ for Gateway Manager Lambda failures
+    const gatewayManagerDlq = new sqs.Queue(this, 'GatewayManagerDlq', {
+      queueName: 'cc-gateway-manager-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+    });
+
+    // Gateway Manager Lambda — manages per-department AgentCore Gateway lifecycle
+    const gatewayManagerLambda = new lambda.Function(this, 'GatewayManagerLambda', {
+      functionName: 'cc-on-bedrock-gateway-manager',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'gateway-manager.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 256,
+      environment: {
+        REGION: cdk.Aws.REGION,
+        ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
+        MCP_CATALOG_TABLE: mcpCatalogTable.tableName,
+        DEPT_MCP_CONFIG_TABLE: deptMcpConfigTable.tableName,
+        DEPT_BUDGETS_TABLE: 'cc-department-budgets',
+        SNS_TOPIC_ARN: alertTopic.topicArn,
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    // Grant Gateway Manager Lambda permissions
+    mcpCatalogTable.grantReadData(gatewayManagerLambda);
+    deptMcpConfigTable.grantReadWriteData(gatewayManagerLambda);
+    departmentBudgetsTable.grantReadWriteData(gatewayManagerLambda);
+    alertTopic.grantPublish(gatewayManagerLambda);
+
+    // AgentCore Gateway management permissions
+    gatewayManagerLambda.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreGatewayManagement',
+      actions: [
+        'bedrock-agentcore-control:CreateGateway',
+        'bedrock-agentcore-control:DeleteGateway',
+        'bedrock-agentcore-control:GetGateway',
+        'bedrock-agentcore-control:ListGateways',
+        'bedrock-agentcore-control:CreateGatewayTarget',
+        'bedrock-agentcore-control:DeleteGatewayTarget',
+        'bedrock-agentcore-control:GetGatewayTarget',
+        'bedrock-agentcore-control:ListGatewayTargets',
+        'bedrock-agentcore-control:SynchronizeGatewayTargets',
+      ],
+      resources: ['*'],
+    }));
+
+    // IAM permissions for creating per-department gateway roles
+    gatewayManagerLambda.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamGatewayRoleManagement',
+      actions: ['iam:CreateRole', 'iam:DeleteRole', 'iam:AttachRolePolicy', 'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:PassRole'],
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-agentcore-gateway-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-agentcore-gateway`,
+      ],
+    }));
+
+    // Lambda invoke permission (for registering Lambda targets)
+    gatewayManagerLambda.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'LambdaInvoke',
+      actions: ['lambda:GetFunction', 'lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-mcp-*`],
+    }));
+
+    // DDB Streams trigger for Gateway Manager Lambda
+    gatewayManagerLambda.addEventSource(new lambdaEventSources.DynamoEventSource(deptMcpConfigTable, {
+      startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+      batchSize: 10,
+      maxBatchingWindow: cdk.Duration.seconds(5),
+      retryAttempts: 3,
+      onFailure: new lambdaEventSources.SqsDlq(gatewayManagerDlq),
+    }));
+
+    // Outputs for new tables
+    new cdk.CfnOutput(this, 'McpCatalogTableName', {
+      value: mcpCatalogTable.tableName,
+    });
+    new cdk.CfnOutput(this, 'DeptMcpConfigTableName', {
+      value: deptMcpConfigTable.tableName,
+    });
+    new cdk.CfnOutput(this, 'GatewayManagerLambdaArn', {
+      value: gatewayManagerLambda.functionArn,
     });
 
     // ─── CUR 2.0 Data Export (TODO) ───

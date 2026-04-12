@@ -1000,6 +1000,74 @@ async function ensureCodeserverPassword(subdomain: string): Promise<string> {
   return password;
 }
 
+/**
+ * Apply AgentCore Gateway inline policy to per-user role.
+ * Grants InvokeGateway on the common gateway + department-specific gateway.
+ * Called on every instance start to keep gateway ARNs current.
+ */
+async function applyGatewayPolicy(roleName: string, department: string): Promise<void> {
+  try {
+    // Query DDB for department and common gateway IDs
+    const { DynamoDBDocumentClient, GetCommand } = await import("@aws-sdk/lib-dynamodb");
+    const docClient = DynamoDBDocumentClient.from(ddbClient);
+
+    const gatewayArns: string[] = [];
+
+    // Common gateway
+    const commonResult = await docClient.send(new GetCommand({
+      TableName: "cc-dept-mcp-config",
+      Key: { PK: "COMMON", SK: "GATEWAY" },
+    }));
+    if (commonResult.Item?.gatewayId) {
+      gatewayArns.push(`arn:aws:bedrock-agentcore:${region}:${accountId}:gateway/${commonResult.Item.gatewayId}`);
+    }
+
+    // Department gateway
+    if (department) {
+      const deptResult = await docClient.send(new GetCommand({
+        TableName: "cc-dept-mcp-config",
+        Key: { PK: `DEPT#${department}`, SK: "GATEWAY" },
+      }));
+      if (deptResult.Item?.gatewayId) {
+        gatewayArns.push(`arn:aws:bedrock-agentcore:${region}:${accountId}:gateway/${deptResult.Item.gatewayId}`);
+      }
+    }
+
+    if (gatewayArns.length === 0) {
+      console.log(`[IAM] No gateways found for dept=${department}, skipping gateway policy`);
+      return;
+    }
+
+    // Also allow DDB read for boot-time MCP config sync
+    await iamClient.send(new PutRolePolicyCommand({
+      RoleName: roleName,
+      PolicyName: "AgentCoreGatewayAccess",
+      PolicyDocument: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Sid: "InvokeGateway",
+            Effect: "Allow",
+            Action: "bedrock-agentcore:InvokeGateway",
+            Resource: gatewayArns,
+          },
+          {
+            Sid: "McpConfigRead",
+            Effect: "Allow",
+            Action: ["dynamodb:GetItem", "dynamodb:Query"],
+            Resource: `arn:aws:dynamodb:${region}:${accountId}:table/cc-dept-mcp-config`,
+          },
+        ],
+      }),
+    }));
+
+    console.log(`[IAM] Applied gateway policy to ${roleName}: ${gatewayArns.length} gateway(s)`);
+  } catch (err) {
+    console.warn(`[IAM] Failed to apply gateway policy to ${roleName}:`, err);
+    // Non-fatal — instance can still start without gateway access
+  }
+}
+
 async function ensureUserInstanceProfile(subdomain: string, username: string, department: string): Promise<string> {
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
   const profileName = roleName;
@@ -1078,6 +1146,9 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
     // Wait for IAM propagation
     await new Promise(r => setTimeout(r, 8000));
   }
+
+  // Apply AgentCore Gateway access policy (updates on every start to reflect dept changes)
+  await applyGatewayPolicy(roleName, department);
 
   // Ensure instance profile exists
   try {

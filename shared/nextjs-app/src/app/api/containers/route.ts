@@ -5,6 +5,8 @@ import {
   startInstance,
   stopInstance,
   terminateInstance,
+  switchOs,
+  restoreFromSnapshot,
   listInstances,
 } from "@/lib/ec2-clients";
 
@@ -26,7 +28,7 @@ export async function GET(req: NextRequest) {
       desiredStatus: i.status.toUpperCase(),
       username: i.username,
       subdomain: i.subdomain,
-      containerOs: "ubuntu" as const,
+      containerOs: i.containerOs ?? "ubuntu",
       resourceTier: i.instanceType ?? "standard",
       securityPolicy: i.securityPolicy,
       privateIp: i.privateIp,
@@ -52,9 +54,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const raw = await req.json();
-    const { subdomain, username, department, securityPolicy, resourceTier } = raw as {
+    const { subdomain, username, department, securityPolicy, resourceTier, containerOs } = raw as {
       subdomain: string; username: string; department?: string;
-      securityPolicy?: string; resourceTier?: string;
+      securityPolicy?: string; resourceTier?: string; containerOs?: string;
     };
     const result = await startInstance({
       subdomain,
@@ -62,6 +64,7 @@ export async function POST(req: NextRequest) {
       department: department ?? "default",
       securityPolicy: (securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
       resourceTier: resourceTier as "light" | "standard" | "power" | undefined,
+      containerOs: containerOs as "ubuntu" | "al2023" | undefined,
     });
     return NextResponse.json({ success: true, data: { taskArn: result.instanceId } });
   } catch (err) {
@@ -72,6 +75,43 @@ export async function POST(req: NextRequest) {
       { success: false, error: isDuplicate ? message : "Internal server error" },
       { status: isDuplicate ? 409 : 500 }
     );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.isAdmin) {
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
+  }
+
+  try {
+    const raw = await req.json();
+    const { subdomain, action, newOs, snapshotId } = raw as {
+      subdomain: string; action: "switch-os" | "restore-snapshot";
+      newOs?: string; snapshotId?: string;
+    };
+
+    if (action === "switch-os") {
+      if (!newOs || !["ubuntu", "al2023"].includes(newOs)) {
+        return NextResponse.json({ error: "Invalid OS type" }, { status: 400 });
+      }
+      const result = await switchOs(subdomain, newOs as "ubuntu" | "al2023");
+      return NextResponse.json({ success: true, data: result });
+    }
+
+    if (action === "restore-snapshot") {
+      if (!snapshotId) {
+        return NextResponse.json({ error: "snapshotId required" }, { status: 400 });
+      }
+      const result = await restoreFromSnapshot(subdomain, snapshotId);
+      return NextResponse.json({ success: true, data: result });
+    }
+
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Internal server error";
+    console.error("[containers] PATCH", message);
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
 
