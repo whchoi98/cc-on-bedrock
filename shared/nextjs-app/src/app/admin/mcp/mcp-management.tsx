@@ -37,6 +37,11 @@ export default function McpManagement() {
   const [gateways, setGateways] = useState<Gateway[]>([]);
   const [selectedDept, setSelectedDept] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [editItem, setEditItem] = useState<McpItem | null>(null);
+  const [form, setForm] = useState({
+    mcpId: "", name: "", description: "", category: "department", lambdaArn: "", tools: "",
+  });
 
   const fetchCatalog = useCallback(async () => {
     const res = await fetch("/api/admin/mcp/catalog");
@@ -125,6 +130,65 @@ export default function McpManagement() {
 
   const assignedMcpIds = new Set(assignments.filter((a) => a.enabled).map((a) => a.mcpId));
 
+  const openCreateModal = () => {
+    setEditItem(null);
+    setForm({ mcpId: "", name: "", description: "", category: "department", lambdaArn: "", tools: "" });
+    setShowModal(true);
+  };
+
+  const openEditModal = (item: McpItem) => {
+    setEditItem(item);
+    setForm({
+      mcpId: item.mcpId,
+      name: item.name,
+      description: item.description,
+      category: item.category,
+      lambdaArn: item.lambdaArn,
+      tools: item.tools.join(", "),
+    });
+    setShowModal(true);
+  };
+
+  const handleSubmitCatalog = async () => {
+    setLoading(true);
+    const toolsArray = form.tools
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    if (editItem) {
+      await fetch("/api/admin/mcp/catalog", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mcpId: editItem.mcpId,
+          name: form.name,
+          description: form.description,
+          category: form.category,
+          lambdaArn: form.lambdaArn,
+          tools: toolsArray,
+        }),
+      });
+    } else {
+      await fetch("/api/admin/mcp/catalog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mcpId: form.mcpId,
+          name: form.name,
+          description: form.description,
+          category: form.category,
+          lambdaArn: form.lambdaArn,
+          tools: toolsArray,
+        }),
+      });
+    }
+
+    await fetchCatalog();
+    setShowModal(false);
+    setLoading(false);
+  };
+
   return (
     <div>
       {/* Tabs */}
@@ -148,11 +212,21 @@ export default function McpManagement() {
 
       {/* Catalog Tab */}
       {tab === "catalog" && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div>
+          <div className="mb-4 flex justify-end">
+            <button
+              onClick={openCreateModal}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+            >
+              + Add MCP
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {catalog.map((item) => (
             <div
               key={item.mcpId}
-              className="bg-gray-800 rounded-lg p-4 border border-gray-700"
+              onClick={() => openEditModal(item)}
+              className="bg-gray-800 rounded-lg p-4 border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors"
             >
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold text-gray-100">{item.name}</h3>
@@ -186,6 +260,7 @@ export default function McpManagement() {
               No MCP items in catalog. Run seed-mcp-catalog.py to populate.
             </p>
           )}
+          </div>
         </div>
       )}
 
@@ -334,6 +409,123 @@ export default function McpManagement() {
                 No gateways created yet
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-lg border border-gray-700">
+            <h2 className="text-lg font-semibold text-gray-100 mb-4">
+              {editItem ? "Edit MCP" : "Add MCP"}
+            </h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSubmitCatalog();
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label htmlFor="modal-mcpId" className="block text-sm text-gray-300 mb-1">
+                  MCP ID
+                </label>
+                <input
+                  id="modal-mcpId"
+                  type="text"
+                  required
+                  disabled={!!editItem}
+                  value={form.mcpId}
+                  onChange={(e) => setForm({ ...form, mcpId: e.target.value })}
+                  placeholder="e.g. jira-tools"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200 disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-name" className="block text-sm text-gray-300 mb-1">
+                  Name
+                </label>
+                <input
+                  id="modal-name"
+                  type="text"
+                  required
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="e.g. Jira Integration"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-desc" className="block text-sm text-gray-300 mb-1">
+                  Description
+                </label>
+                <input
+                  id="modal-desc"
+                  type="text"
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  placeholder="Short description"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-category" className="block text-sm text-gray-300 mb-1">
+                  Category
+                </label>
+                <select
+                  id="modal-category"
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                >
+                  <option value="common">Common</option>
+                  <option value="department">Department</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="modal-arn" className="block text-sm text-gray-300 mb-1">
+                  Lambda ARN
+                </label>
+                <input
+                  id="modal-arn"
+                  type="text"
+                  value={form.lambdaArn}
+                  onChange={(e) => setForm({ ...form, lambdaArn: e.target.value })}
+                  placeholder="arn:aws:lambda:..."
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="modal-tools" className="block text-sm text-gray-300 mb-1">
+                  Tools (comma-separated)
+                </label>
+                <input
+                  id="modal-tools"
+                  type="text"
+                  value={form.tools}
+                  onChange={(e) => setForm({ ...form, tools: e.target.value })}
+                  placeholder="list_issues, create_ticket, search"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors disabled:opacity-50"
+                >
+                  {loading ? "Saving..." : editItem ? "Update" : "Create"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

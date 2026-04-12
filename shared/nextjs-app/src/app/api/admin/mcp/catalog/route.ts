@@ -98,11 +98,16 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "mcpId required" }, { status: 400 });
     }
 
+    const ALLOWED_FIELDS = ["name", "description", "category", "lambdaArn", "tools", "enabled"];
+    const filtered = Object.fromEntries(
+      Object.entries(updates).filter(([k]) => ALLOWED_FIELDS.includes(k))
+    );
+
     const expressionParts: string[] = [];
     const attrNames: Record<string, string> = {};
     const attrValues: Record<string, unknown> = {};
 
-    for (const [key, value] of Object.entries(updates)) {
+    for (const [key, value] of Object.entries(filtered)) {
       const placeholder = `#${key}`;
       const valKey = `:${key}`;
       expressionParts.push(`${placeholder} = ${valKey}`);

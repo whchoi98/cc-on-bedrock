@@ -22,6 +22,7 @@ import {
 import {
   SSMClient,
   GetParameterCommand,
+  SendCommandCommand,
 } from "@aws-sdk/client-ssm";
 import {
   DynamoDBClient,
@@ -142,6 +143,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 
       // Wait for running + get IP
       const info = await waitForRunning(existing.instanceId);
+
+      // Sync code-server password from Secrets Manager (UserData only runs on first boot)
+      await syncCodeserverPassword(existing.instanceId, input.subdomain);
 
       // Update routing table
       await registerRoute(input.subdomain, info.privateIp);
@@ -976,6 +980,31 @@ async function deregisterRoute(subdomain: string): Promise<void> {
   }
 }
 
+/**
+ * Sync code-server password from Secrets Manager to a running EC2 instance.
+ * UserData only runs on first boot; this ensures password changes are applied on Start.
+ */
+async function syncCodeserverPassword(instanceId: string, subdomain: string): Promise<void> {
+  try {
+    const password = await ensureCodeserverPassword(subdomain);
+    await ssmClient.send(new SendCommandCommand({
+      InstanceIds: [instanceId],
+      DocumentName: "AWS-RunShellScript",
+      Parameters: {
+        commands: [
+          `sed -i "s/^password:.*/password: ${password}/" /home/coder/.config/code-server/config.yaml`,
+          `systemctl restart code-server 2>/dev/null || true`,
+        ],
+      },
+      TimeoutSeconds: 30,
+    }));
+    console.log(`[EC2] Synced code-server password for ${subdomain} on ${instanceId}`);
+  } catch (err) {
+    console.warn(`[EC2] Password sync failed for ${subdomain}:`, err);
+    // Non-critical: code-server still works with old password
+  }
+}
+
 const ROLE_PREFIX = "cc-on-bedrock-task";  // Reuse same naming convention as ECS for CloudTrail compatibility
 
 async function ensureCodeserverPassword(subdomain: string): Promise<string> {
@@ -1016,7 +1045,7 @@ async function applyGatewayPolicy(roleName: string, department: string): Promise
     // Common gateway
     const commonResult = await docClient.send(new GetCommand({
       TableName: "cc-dept-mcp-config",
-      Key: { PK: "COMMON", SK: "GATEWAY" },
+      Key: { PK: "DEPT#COMMON", SK: "GATEWAY" },
     }));
     if (commonResult.Item?.gatewayId) {
       gatewayArns.push(`arn:aws:bedrock-agentcore:${region}:${accountId}:gateway/${commonResult.Item.gatewayId}`);

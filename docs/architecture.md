@@ -286,10 +286,11 @@ sequenceDiagram
     Dash->>EC2: 6. RunInstances / StartInstances
     Note over EC2: Per-user EC2 (ARM64)
     Dash-->>Nginx: 7. Register IP in cc-routing-table
-    Dash-->>User: 8. Link: user.dev.whchoi.net
-    User->>Nginx: 9. Host-based routing
-    Nginx->>EC2: 10. Reverse proxy to instance
-    Note over EC2: code-server (password auth)<br/>EBS root volume preserves state
+    Dash-->>User: 8. Link: user.dev.whchoi.net/?folder=/home/coder
+    User->>Nginx: 9. Host-based routing (multi-port)
+    Note over Nginx: ?folder= → :8080 (code-server)<br/>/api/ → :8000 (API server)<br/>/ → :3000 (Frontend dev)
+    Nginx->>EC2: 10. Reverse proxy to instance port
+    Note over EC2: code-server :8080 (password auth)<br/>Frontend :3000 / API :8000 (optional)<br/>EBS root volume preserves state
     EC2->>Bedrock: 11. Claude Code → Instance Profile → Bedrock VPC Endpoint
     Bedrock-->>EC2: 12. Streamed response
     Note over EC2: 45min idle → auto-stop
