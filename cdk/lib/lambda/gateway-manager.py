@@ -27,6 +27,7 @@ ACCOUNT_ID = os.environ.get("ACCOUNT_ID", "")
 MCP_CATALOG_TABLE = os.environ.get("MCP_CATALOG_TABLE", "cc-mcp-catalog")
 DEPT_MCP_CONFIG_TABLE = os.environ.get("DEPT_MCP_CONFIG_TABLE", "cc-dept-mcp-config")
 GATEWAY_ROLE_PREFIX = "cc-on-bedrock-agentcore-gateway"
+PERMISSION_BOUNDARY_NAME = os.environ.get("PERMISSION_BOUNDARY_NAME", "cc-on-bedrock-task-boundary")
 TRUST_POLICY = json.dumps({
     "Version": "2012-10-17",
     "Statement": [{
@@ -64,7 +65,9 @@ def update_gateway_status(department: str, status: str, extra: dict = None):
     }
     if extra:
         for k, v in extra.items():
-            update_expr += f", {k} = :{k}"
+            alias = f"#extra_{k}"
+            update_expr += f", {alias} = :{k}"
+            attr_names[alias] = k
             attr_values[f":{k}"] = {"S": str(v)}
 
     dynamodb.update_item(
@@ -88,9 +91,11 @@ def create_gateway_role(department: str) -> str:
     except iam.exceptions.NoSuchEntityException:
         pass
 
+    boundary_arn = f"arn:aws:iam::{account_id}:policy/{PERMISSION_BOUNDARY_NAME}"
     resp = iam.create_role(
         RoleName=role_name,
         AssumeRolePolicyDocument=TRUST_POLICY,
+        PermissionsBoundary=boundary_arn,
         Description=f"AgentCore Gateway role for department: {department}",
         Tags=[
             {"Key": "project", "Value": "cc-on-bedrock"},
@@ -108,7 +113,7 @@ def create_gateway_role(department: str) -> str:
             "Statement": [{
                 "Effect": "Allow",
                 "Action": "lambda:InvokeFunction",
-                "Resource": f"arn:aws:lambda:{REGION}:{account_id}:function:cconbedrock-*-mcp",
+                "Resource": f"arn:aws:lambda:{REGION}:{account_id}:function:cc-on-bedrock-mcp-*",
             }],
         }),
     )
@@ -142,14 +147,17 @@ def get_mcp_lambda_arn(mcp_id: str) -> str:
     arn = item.get("lambdaArn", {}).get("S", "")
     if not arn:
         account_id = get_account_id()
-        arn = f"arn:aws:lambda:{REGION}:{account_id}:function:cconbedrock-{mcp_id}"
+        arn = f"arn:aws:lambda:{REGION}:{account_id}:function:cc-on-bedrock-mcp-{mcp_id}"
     return arn
 
 
 def create_gateway(department: str):
-    """Create AgentCore Gateway for department."""
+    """Create AgentCore Gateway for department with rollback on failure."""
     logger.info(f"Creating gateway for department: {department}")
     update_gateway_status(department, "CREATING")
+
+    role_arn = None
+    gateway_id = None
 
     try:
         role_arn = create_gateway_role(department)
@@ -172,12 +180,20 @@ def create_gateway(department: str):
         logger.info(f"Gateway created: {gateway_id}")
 
         # Wait for gateway to be active
+        gw_status = "UNKNOWN"
         for _ in range(30):
             gw = agentcore.get_gateway(gatewayId=gateway_id)
-            status = gw.get("status", "UNKNOWN")
-            if status == "ACTIVE":
+            gw_status = gw.get("status", "UNKNOWN")
+            if gw_status == "ACTIVE":
                 break
             time.sleep(2)
+
+        if gw_status != "ACTIVE":
+            update_gateway_status(department, "ERROR", {
+                "gatewayId": gateway_id,
+                "error": f"Gateway did not reach ACTIVE, final status: {gw_status}",
+            })
+            raise RuntimeError(f"Gateway {gateway_id} stuck in {gw_status}")
 
         gateway_url = gw.get("gatewayUrl", "")
 
@@ -196,13 +212,27 @@ def create_gateway(department: str):
 
     except Exception as e:
         logger.error(f"Gateway creation failed: {e}")
+        # Compensating transaction: rollback completed steps
+        if gateway_id and agentcore:
+            try:
+                agentcore.delete_gateway(gatewayId=gateway_id)
+                logger.info(f"Rollback: deleted gateway {gateway_id}")
+            except Exception as rollback_err:
+                logger.error(f"Rollback gateway delete failed: {rollback_err}")
+        if role_arn:
+            try:
+                delete_gateway_role(department)
+                logger.info(f"Rollback: deleted IAM role for {department}")
+            except Exception as rollback_err:
+                logger.error(f"Rollback role delete failed: {rollback_err}")
         update_gateway_status(department, "ERROR", {"error": str(e)})
         raise
 
 
 def delete_gateway(department: str):
-    """Delete AgentCore Gateway for department."""
+    """Delete AgentCore Gateway for department with step tracking."""
     logger.info(f"Deleting gateway for department: {department}")
+    completed_steps = []
 
     try:
         # Get gateway ID from DDB
@@ -222,27 +252,34 @@ def delete_gateway(department: str):
                         gatewayId=gateway_id,
                         targetId=target["targetId"],
                     )
+                completed_steps.append("targets_removed")
             except Exception as e:
                 logger.warning(f"Error removing targets: {e}")
 
             # Delete gateway
             agentcore.delete_gateway(gatewayId=gateway_id)
+            completed_steps.append("gateway_deleted")
             logger.info(f"Gateway {gateway_id} deleted")
 
         # Clean up IAM role
         delete_gateway_role(department)
+        completed_steps.append("role_deleted")
 
         # Remove DDB record
         dynamodb.delete_item(
             TableName=DEPT_MCP_CONFIG_TABLE,
             Key={"PK": {"S": f"DEPT#{department}"}, "SK": {"S": "GATEWAY"}},
         )
+        completed_steps.append("ddb_cleaned")
 
         logger.info(f"Gateway cleanup complete for {department}")
 
     except Exception as e:
-        logger.error(f"Gateway deletion failed: {e}")
-        update_gateway_status(department, "DELETE_FAILED", {"error": str(e)})
+        logger.error(f"Gateway deletion failed at steps={completed_steps}: {e}")
+        update_gateway_status(department, "DELETE_FAILED", {
+            "error": str(e),
+            "completedSteps": ",".join(completed_steps),
+        })
         raise
 
 
@@ -329,6 +366,10 @@ def handle_stream_event(record: dict):
             status = new_image.get("status", {}).get("S", "")
             if status in ("PENDING", "CREATING"):
                 create_gateway(department)
+        elif event_name == "MODIFY":
+            status = new_image.get("status", {}).get("S", "")
+            if status == "DELETING":
+                delete_gateway(department)
         elif event_name == "REMOVE":
             delete_gateway(department)
 

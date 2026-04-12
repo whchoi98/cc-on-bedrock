@@ -5,17 +5,15 @@ import {
   DynamoDBClient,
   ScanCommand,
   PutItemCommand,
-  DeleteItemCommand,
+  UpdateItemCommand,
 } from "@aws-sdk/client-dynamodb";
-import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { unmarshall, marshall } from "@aws-sdk/util-dynamodb";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const DEPT_MCP_CONFIG_TABLE = process.env.DEPT_MCP_CONFIG_TABLE ?? "cc-dept-mcp-config";
-const GATEWAY_MANAGER_FUNCTION = process.env.GATEWAY_MANAGER_FUNCTION ?? "cc-on-bedrock-gateway-manager";
 
 const dynamodb = new DynamoDBClient({ region });
-const lambda = new LambdaClient({ region });
+const DEPT_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$/;
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -62,11 +60,11 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { department } = body;
 
-    if (!department) {
-      return NextResponse.json({ error: "department required" }, { status: 400 });
+    if (!department || !DEPT_PATTERN.test(department)) {
+      return NextResponse.json({ error: "Invalid department (alphanumeric and hyphens only)" }, { status: 400 });
     }
 
-    // Write initial gateway record to DDB (this triggers Streams → Lambda)
+    // Write gateway record to DDB — DDB Streams triggers gateway-manager Lambda
     await dynamodb.send(
       new PutItemCommand({
         TableName: DEPT_MCP_CONFIG_TABLE,
@@ -77,20 +75,6 @@ export async function POST(req: NextRequest) {
           createdAt: new Date().toISOString(),
           createdBy: session.user.email,
         }),
-      })
-    );
-
-    // Also invoke Lambda directly for immediate creation
-    await lambda.send(
-      new InvokeCommand({
-        FunctionName: GATEWAY_MANAGER_FUNCTION,
-        InvocationType: "Event",
-        Payload: Buffer.from(
-          JSON.stringify({
-            action: "create_gateway",
-            department,
-          })
-        ),
       })
     );
 
@@ -114,35 +98,22 @@ export async function DELETE(req: NextRequest) {
     const body = await req.json();
     const { department } = body;
 
-    if (!department) {
-      return NextResponse.json({ error: "department required" }, { status: 400 });
+    if (!department || !DEPT_PATTERN.test(department)) {
+      return NextResponse.json({ error: "Invalid department (alphanumeric and hyphens only)" }, { status: 400 });
     }
 
-    // Update status to DELETING
+    // Update status to DELETING (preserve gatewayId for Lambda cleanup)
     await dynamodb.send(
-      new PutItemCommand({
+      new UpdateItemCommand({
         TableName: DEPT_MCP_CONFIG_TABLE,
-        Item: marshall({
-          PK: `DEPT#${department}`,
-          SK: "GATEWAY",
-          status: "DELETING",
-          deletedAt: new Date().toISOString(),
-          deletedBy: session.user.email,
+        Key: marshall({ PK: `DEPT#${department}`, SK: "GATEWAY" }),
+        UpdateExpression: "SET #status = :status, deletedAt = :deletedAt, deletedBy = :deletedBy",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: marshall({
+          ":status": "DELETING",
+          ":deletedAt": new Date().toISOString(),
+          ":deletedBy": session.user.email,
         }),
-      })
-    );
-
-    // Invoke Lambda for deletion
-    await lambda.send(
-      new InvokeCommand({
-        FunctionName: GATEWAY_MANAGER_FUNCTION,
-        InvocationType: "Event",
-        Payload: Buffer.from(
-          JSON.stringify({
-            action: "delete_gateway",
-            department,
-          })
-        ),
       })
     );
 

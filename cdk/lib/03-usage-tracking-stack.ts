@@ -12,6 +12,7 @@ import * as logsDest from 'aws-cdk-lib/aws-logs-destinations';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 import * as path from 'path';
@@ -431,13 +432,26 @@ export class UsageTrackingStack extends cdk.Stack {
     const gatewayManagerDlq = new sqs.Queue(this, 'GatewayManagerDlq', {
       queueName: 'cc-gateway-manager-dlq',
       retentionPeriod: cdk.Duration.days(14),
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // DLQ alarm — notify when failed events arrive
+    new cloudwatch.Alarm(this, 'GatewayManagerDlqAlarm', {
+      alarmName: 'cc-gateway-manager-dlq-messages',
+      alarmDescription: 'Gateway Manager Lambda has failed events in DLQ',
+      metric: gatewayManagerDlq.metricApproximateNumberOfMessagesVisible({
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
 
     // Gateway Manager Lambda — manages per-department AgentCore Gateway lifecycle
     const gatewayManagerLambda = new lambda.Function(this, 'GatewayManagerLambda', {
       functionName: 'cc-on-bedrock-gateway-manager',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'gateway-manager.handler',
+      handler: 'gateway-manager.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
       timeout: cdk.Duration.minutes(5),
       memorySize: 256,
@@ -448,6 +462,7 @@ export class UsageTrackingStack extends cdk.Stack {
         DEPT_MCP_CONFIG_TABLE: deptMcpConfigTable.tableName,
         DEPT_BUDGETS_TABLE: 'cc-department-budgets',
         SNS_TOPIC_ARN: alertTopic.topicArn,
+        PERMISSION_BOUNDARY_NAME: 'cc-on-bedrock-task-boundary',
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
     });
@@ -478,11 +493,23 @@ export class UsageTrackingStack extends cdk.Stack {
     // IAM permissions for creating per-department gateway roles
     gatewayManagerLambda.addToRolePolicy(new iam.PolicyStatement({
       sid: 'IamGatewayRoleManagement',
-      actions: ['iam:CreateRole', 'iam:DeleteRole', 'iam:AttachRolePolicy', 'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:PassRole'],
+      // AttachRolePolicy/DetachRolePolicy: admin 승인 후 MCP용 managed policy attach 워크플로우에 필요
+      actions: ['iam:CreateRole', 'iam:DeleteRole', 'iam:GetRole', 'iam:AttachRolePolicy', 'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:ListRolePolicies', 'iam:ListAttachedRolePolicies'],
       resources: [
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-agentcore-gateway-*`,
-        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-agentcore-gateway`,
       ],
+    }));
+    gatewayManagerLambda.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamPassRoleToAgentCore',
+      actions: ['iam:PassRole'],
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-agentcore-gateway-*`,
+      ],
+      conditions: {
+        StringEquals: {
+          'iam:PassedToService': 'bedrock-agentcore.amazonaws.com',
+        },
+      },
     }));
 
     // Lambda invoke permission (for registering Lambda targets)
@@ -498,6 +525,7 @@ export class UsageTrackingStack extends cdk.Stack {
       batchSize: 10,
       maxBatchingWindow: cdk.Duration.seconds(5),
       retryAttempts: 3,
+      reportBatchItemFailures: true,
       onFailure: new lambdaEventSources.SqsDlq(gatewayManagerDlq),
     }));
 
