@@ -63,6 +63,7 @@ const INSTANCE_TABLE = process.env.INSTANCE_TABLE ?? "cc-user-instances";
 const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
 const LAUNCH_TEMPLATE = process.env.LAUNCH_TEMPLATE ?? "cc-on-bedrock-devenv";
 const VPC_SUBNET_IDS = (process.env.PRIVATE_SUBNET_IDS ?? "").split(",").filter(Boolean);
+const HIBERNATE_ENABLED = (process.env.HIBERNATE_ENABLED ?? "false") === "true";
 
 // DLP Security Group IDs (from CDK outputs / env vars)
 const SG_MAP: Record<string, string> = {
@@ -212,6 +213,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
     IamInstanceProfile: { Name: instanceProfileName },
     InstanceType: tier.type as never,
     MetadataOptions: { HttpTokens: "required", HttpPutResponseHopLimit: 2 },
+    HibernationOptions: HIBERNATE_ENABLED ? { Configured: true } : undefined,
     MinCount: 1,
     MaxCount: 1,
     SubnetId: subnet,
@@ -226,6 +228,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
         { Key: "securityPolicy", Value: input.securityPolicy },
         { Key: "containerOs", Value: osType },
         { Key: "managed_by", Value: "cc-on-bedrock" },
+        { Key: "hibernateCapable", Value: HIBERNATE_ENABLED ? "true" : "false" },
       ],
     }],
     UserData: Buffer.from([
@@ -308,7 +311,8 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
 }
 
 /**
- * Stop a user's instance. EBS volume preserved automatically.
+ * Stop (or hibernate) a user's instance. EBS volume preserved automatically.
+ * Hibernate preserves RAM state for instant resume (ADR-010).
  */
 export async function stopInstance(subdomain: string, reason?: string): Promise<void> {
   const record = await getUserInstance(subdomain);
@@ -322,12 +326,33 @@ export async function stopInstance(subdomain: string, reason?: string): Promise<
   // Deregister route first
   await deregisterRoute(subdomain);
 
-  // Stop instance (EBS preserved)
-  await ec2Client.send(new StopInstancesCommand({
-    InstanceIds: [record.instanceId],
-  }));
+  // Check if instance supports hibernation
+  const shouldHibernate = HIBERNATE_ENABLED && await isHibernateCapable(record.instanceId);
 
-  await updateInstanceRecord(subdomain, { status: "stopped" });
+  try {
+    await ec2Client.send(new StopInstancesCommand({
+      InstanceIds: [record.instanceId],
+      Hibernate: shouldHibernate,
+    }));
+    await updateInstanceRecord(subdomain, {
+      status: shouldHibernate ? "hibernated" : "stopped",
+      ...(shouldHibernate ? { hibernatedAt: new Date().toISOString() } : {}),
+    });
+    if (shouldHibernate) {
+      console.log(`[EC2] Hibernated instance ${record.instanceId}`);
+    }
+  } catch (err) {
+    // Fallback: if hibernate fails, do a regular stop
+    if (shouldHibernate) {
+      console.warn(`[EC2] Hibernate failed for ${record.instanceId}, falling back to regular stop:`, err);
+      await ec2Client.send(new StopInstancesCommand({
+        InstanceIds: [record.instanceId],
+      }));
+      await updateInstanceRecord(subdomain, { status: "stopped" });
+    } else {
+      throw err;
+    }
+  }
 }
 
 /**
@@ -382,7 +407,7 @@ export async function switchOs(
   if (instance.State?.Name === "running") {
     console.log(`[EC2] Stopping ${record.instanceId} for OS switch`);
     await deregisterRoute(subdomain);
-    await ec2Client.send(new StopInstancesCommand({ InstanceIds: [record.instanceId] }));
+    await ec2Client.send(new StopInstancesCommand({ InstanceIds: [record.instanceId], Hibernate: false }));
     // Wait for stopped
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 5000));
@@ -541,6 +566,7 @@ export async function restoreFromSnapshot(
     IamInstanceProfile: { Name: instanceProfileName },
     InstanceType: tier.type as never,
     MetadataOptions: { HttpTokens: "required", HttpPutResponseHopLimit: 2 },
+    HibernationOptions: HIBERNATE_ENABLED ? { Configured: true } : undefined,
     MinCount: 1, MaxCount: 1,
     SubnetId: subnet,
     SecurityGroupIds: sg ? [sg] : undefined,
@@ -555,6 +581,7 @@ export async function restoreFromSnapshot(
         { Key: "containerOs", Value: previousOs },
         { Key: "managed_by", Value: "cc-on-bedrock" },
         { Key: "restoredFrom", Value: snapshotId },
+        { Key: "hibernateCapable", Value: HIBERNATE_ENABLED ? "true" : "false" },
       ],
     }],
     UserData: Buffer.from([
@@ -774,9 +801,9 @@ export async function changeTier(
 
   const wasRunning = desc.status === "running";
 
-  // Stop if running
+  // Stop if running (must be regular stop, not hibernate — need to modify instance type)
   if (wasRunning) {
-    await ec2Client.send(new StopInstancesCommand({ InstanceIds: [record.instanceId] }));
+    await ec2Client.send(new StopInstancesCommand({ InstanceIds: [record.instanceId], Hibernate: false }));
     // Wait for stopped
     for (let i = 0; i < 60; i++) {
       await new Promise(r => setTimeout(r, 5000));
@@ -952,6 +979,16 @@ async function waitForRunning(instanceId: string): Promise<{ privateIp: string; 
     await new Promise(r => setTimeout(r, 5000));
   }
   throw new Error(`Instance ${instanceId} did not reach running state`);
+}
+
+async function isHibernateCapable(instanceId: string): Promise<boolean> {
+  try {
+    const result = await ec2Client.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+    const inst = result.Reservations?.[0]?.Instances?.[0];
+    return inst?.HibernationOptions?.Configured === true;
+  } catch {
+    return false;
+  }
 }
 
 async function registerRoute(subdomain: string, privateIp: string): Promise<void> {

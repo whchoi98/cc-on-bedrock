@@ -228,6 +228,10 @@ COMMAND_ID=$(aws ssm send-command \
     "CSCFG",
     "chown -R coder:coder /home/coder/.config /home/coder/workspace",
     "systemctl enable code-server",
+    "# EC2 Hibernation agent (ADR-010)",
+    "apt-get update -qq && apt-get install -y ec2-hibinit-agent",
+    "echo GRUB_CMDLINE_LINUX_DEFAULT=\\\"nokaslr\\\" > /etc/default/grub.d/99-hibernation.cfg",
+    "update-grub",
     "# Cleanup",
     "apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*",
     "echo AMI setup complete"

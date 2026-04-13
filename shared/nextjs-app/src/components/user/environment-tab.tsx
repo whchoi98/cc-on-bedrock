@@ -218,19 +218,25 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         return;
       }
 
-      // Poll until instance is fully stopped
+      // Poll until instance is fully stopped or hibernated
+      let finalData = null;
       for (let i = 0; i < 12; i++) {
         await new Promise(r => setTimeout(r, 5000));
         try {
           const check = await fetch("/api/user/container");
           const checkData = await check.json();
           if (!checkData.data || checkData.data.status === "STOPPED" || checkData.data.status === "stopped") {
+            finalData = null;
+            break;
+          }
+          if (checkData.data.status === "HIBERNATED") {
+            finalData = checkData.data;
             break;
           }
         } catch { /* continue polling */ }
       }
 
-      setContainer(null);
+      setContainer(finalData);
     } catch {
       setError("Failed to stop instance");
     } finally {
@@ -360,6 +366,15 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
             <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-yellow-900/30 text-yellow-400">
               <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
               {t("monitoring.pending")}
+            </span>
+          )}
+          {container && container.status === "HIBERNATED" && (
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-blue-900/30 text-blue-400"
+              title="메모리 상태가 보존되어 빠르게 재개됩니다">
+              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
+              </svg>
+              Hibernated
             </span>
           )}
           {!container && !isProvisioning && (
@@ -500,13 +515,14 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
         )}
 
         <div className="flex items-center gap-3">
-          {!container && !isProvisioning && (
+          {(!container || container.status === "HIBERNATED") && !isProvisioning && (
             <button
               onClick={handleStartContainer}
               disabled={actionLoading || !hasSubdomain}
               className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium rounded-lg transition-colors"
+              title={container?.status === "HIBERNATED" ? "메모리 상태가 보존되어 빠르게 재개됩니다" : undefined}
             >
-              {t("user.start") || "Start Instance"}
+              {container?.status === "HIBERNATED" ? "Resume" : (t("user.start") || "Start Instance")}
             </button>
           )}
           {container && container.status === "STOPPING" && (
@@ -517,7 +533,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
               {t("user.stopping") || "Stopping..."}
             </button>
           )}
-          {container && container.status !== "STOPPING" && (
+          {container && container.status !== "STOPPING" && container.status !== "HIBERNATED" && (
             <>
               <button
                 onClick={handleStopContainer}

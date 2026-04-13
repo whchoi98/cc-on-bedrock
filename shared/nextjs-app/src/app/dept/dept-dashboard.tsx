@@ -481,6 +481,8 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                           className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${
                             member.containerStatus === "RUNNING"
                               ? "bg-green-900/30 text-green-400"
+                              : member.containerStatus === "HIBERNATED"
+                              ? "bg-blue-900/30 text-blue-400"
                               : member.containerStatus === "PENDING" ||
                                 member.containerStatus === "PROVISIONING"
                               ? "bg-yellow-900/30 text-yellow-400"
