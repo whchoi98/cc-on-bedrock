@@ -13,6 +13,7 @@
 - `src/app/security/` - Security Dashboard (IAM, DLP 정책, DNS Firewall 현황)
 - `src/app/admin/` - 사용자 CRUD, API 키 관리
 - `src/app/admin/containers/` - 컨테이너 할당/시작/중지
+- `src/app/admin/mcp/` - MCP 카탈로그/게이트웨이 관리 (서버 할당, 동기화)
 
 ## API Routes
 
@@ -25,6 +26,10 @@
 - `src/app/api/admin/ebs-resize/route.ts` - EBS 리사이즈 승인/거부 (Admin)
 - `src/app/api/admin/budgets/route.ts` - 부서 예산 관리 (Admin)
 - `src/app/api/admin/tokens/route.ts` - 토큰 관리 (Admin)
+- `src/app/api/admin/mcp/catalog/route.ts` - MCP 서버 카탈로그 CRUD (Admin)
+- `src/app/api/admin/mcp/gateways/route.ts` - MCP 게이트웨이 관리 (Admin)
+- `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 설정 동기화 (Admin)
+- `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-유저 할당 (Admin)
 
 ### User Self-Service
 - `src/app/api/user/container/route.ts` - 컨테이너 시작/중지
@@ -44,7 +49,7 @@
 ## Components
 
 ### User Portal (`src/components/user/`)
-- `environment-tab.tsx` - 환경 정보 탭 (프로비저닝, 상태, URL, 메트릭, 사용량)
+- `environment-tab.tsx` - 환경 정보 탭 (프로비저닝, 상태, 멀티URL [IDE/WEB/API], 메트릭, 사용량)
 - `provisioning-progress.tsx` - SSE 6단계 프로비저닝 프로그레스 (Cancel, ARIA)
 - `storage-tab.tsx` - 스토리지 탭 (디스크 게이지, EBS 확장 신청, Keep-Alive)
 - `settings-tab.tsx` - 설정 탭 (비밀번호 관리, 계정 정보)
@@ -66,6 +71,7 @@
   - `startContainer()` - 기존 컨테이너 시작
   - `startContainerWithProgress()` - SSE 콜백 기반 단계별 시작
   - `createCognitoUser()` - 초기 비밀번호 Cognito + Secrets Manager 동기화
+- `src/lib/ec2-clients.ts` - EC2 인스턴스 관리 (start/stop, RunInstances, password sync, gateway policy)
 - `src/lib/cloudwatch-client.ts` - CloudWatch 메트릭 클라이언트
 - `src/lib/usage-client.ts` - DynamoDB 기반 사용량 조회 (CloudTrail → EventBridge → Lambda → DynamoDB)
 - `src/lib/i18n.tsx` - 다국어(한/영) 지원

@@ -2,6 +2,8 @@
 Bedrock Usage Tracker Lambda
 Processes Bedrock Invocation Logging events from TWO sources:
   1. CloudWatch Logs Subscription (primary - has token counts + cost)
+     textDataDeliveryEnabled=false: metadata only (token counts, model, identity)
+     Full text is NOT logged to reduce CloudWatch Logs cost (~99% reduction)
   2. EventBridge CloudTrail events (fallback - request count only, no tokens)
 
 DynamoDB Schema:
@@ -236,12 +238,13 @@ def process_invocation_log(log_event: dict):
     input_tokens = input_data.get("inputTokenCount", 0) or data.get("inputTokenCount", 0)
     output_tokens = output_data.get("outputTokenCount", 0) or data.get("outputTokenCount", 0)
 
-    # Latency from output metrics
-    output_body = output_data.get("outputBodyJson", {})
-    latency_ms = 0
-    if isinstance(output_body, dict):
-        metrics = output_body.get("metrics", {})
-        latency_ms = metrics.get("latencyMs", 0) or 0
+    # Latency from output metrics (only available when textDataDeliveryEnabled=true)
+    latency_ms = data.get("latencyMs", 0) or 0
+    if not latency_ms:
+        output_body = output_data.get("outputBodyJson", {})
+        if isinstance(output_body, dict):
+            metrics = output_body.get("metrics", {})
+            latency_ms = metrics.get("latencyMs", 0) or 0
 
     # Timestamp
     timestamp = data.get("timestamp", datetime.utcnow().isoformat())
