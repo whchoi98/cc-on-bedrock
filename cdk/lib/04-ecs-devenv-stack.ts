@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as efs from 'aws-cdk-lib/aws-efs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -44,8 +43,6 @@ export class EcsDevenvStack extends cdk.Stack {
   public readonly sgOpen: ec2.SecurityGroup;
   public readonly sgRestricted: ec2.SecurityGroup;
   public readonly sgLocked: ec2.SecurityGroup;
-  public readonly efsFileSystemId: string;
-
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
 
@@ -124,19 +121,6 @@ export class EcsDevenvStack extends cdk.Stack {
     // ECR Repository (import existing - was created with RETAIN policy)
     this.ecrRepo = ecr.Repository.fromRepositoryName(this, 'DevenvRepo', 'cc-on-bedrock/devenv');
 
-    // EFS File System
-    const fileSystem = new efs.FileSystem(this, 'DevenvEfs', {
-      vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      encrypted: true,
-      kmsKey: encryptionKey,
-      lifecyclePolicy: efs.LifecyclePolicy.AFTER_14_DAYS,
-      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
-      throughputMode: efs.ThroughputMode.ELASTIC,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-    this.efsFileSystemId = fileSystem.fileSystemId;
-
     // S3 Bucket for user workspace data (import existing - was created with RETAIN policy)
     const userDataBucket = s3.Bucket.fromBucketAttributes(this, 'UserDataBucket', {
       bucketName: `cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}`,
@@ -162,11 +146,6 @@ export class EcsDevenvStack extends cdk.Stack {
     const sgOpen = this.sgOpen;
     const sgRestricted = this.sgRestricted;
     const sgLocked = this.sgLocked;
-
-    // Allow EFS access from all DLP SGs
-    [sgOpen, sgRestricted, sgLocked].forEach(sg => {
-      fileSystem.connections.allowFrom(sg, ec2.Port.tcp(2049), 'Allow EFS from devenv');
-    });
 
     // ECS Cluster
     this.cluster = new ecs.Cluster(this, 'DevenvCluster', {
@@ -517,7 +496,6 @@ export class EcsDevenvStack extends cdk.Stack {
 
     // Outputs
     new cdk.CfnOutput(this, 'ClusterName', { value: this.cluster.clusterName, exportName: 'cc-ecs-cluster-name' });
-    new cdk.CfnOutput(this, 'EfsId', { value: fileSystem.fileSystemId, exportName: 'cc-efs-id' });
     new cdk.CfnOutput(this, 'CloudFrontDomain', { value: distribution.distributionDomainName, exportName: 'cc-devenv-cf-domain' });
     new cdk.CfnOutput(this, 'SgOpen', { value: sgOpen.securityGroupId, exportName: 'cc-sg-devenv-open' });
     new cdk.CfnOutput(this, 'SgRestricted', { value: sgRestricted.securityGroupId, exportName: 'cc-sg-devenv-restricted' });

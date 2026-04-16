@@ -1,6 +1,6 @@
 # ADR-005: Security Policy & Access Control — DLP 3-tier + IAM Policy Set + 신청/승인
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-04-09
 
@@ -110,6 +110,24 @@ Admin → PUT /api/admin/approval-requests
 - **Pros**: AWS 네이티브 승인 workflow, CloudFormation 기반
 - **Cons**: 학습 곡선, Service Catalog 자체 비용, DLP SG 변경과 IAM 확장이 별도 workflow
 - **탈락 이유**: 단순한 요구에 과한 인프라, DynamoDB 기반이 더 경량
+
+## Implementation
+
+전 항목 구현 완료 (2026-04-16 기준).
+
+| 구성요소 | 구현 위치 |
+|---------|---------|
+| DLP 3-tier Security Groups | `cdk/lib/07-ec2-devenv-stack.ts` — DevenvSgOpen / SgRestricted / SgLocked |
+| 인스턴스별 SG 선택 | `shared/nextjs-app/src/lib/ec2-clients.ts` — `SG_MAP`, `startInstance()` |
+| 실행 중 SG 교체 | `ec2-clients.ts` — `changeSecurityPolicy()` (ENI SG swap, 재시작 불필요) |
+| IAM Policy Set Catalog | `ec2-clients.ts` — `IAM_POLICY_SETS` (7개 사전 정의 정책) |
+| Policy 부착/제거 | `ec2-clients.ts` — `addIamPolicySet()`, `removeIamPolicySet()` |
+| 승인 요청 테이블 | `cdk/lib/03-usage-tracking-stack.ts` — `cc-on-bedrock-approval-requests` |
+| 사용자 신청 API | `src/app/api/user/container-request/route.ts` — tier/dlp/iam 3종 |
+| Admin 승인 API | `src/app/api/admin/approval-requests/route.ts` — approve/reject + 자동 적용 |
+
+### ADR 대비 변경사항
+- 테이블명: `cc-approval-requests` → `cc-on-bedrock-approval-requests` (프로젝트 네이밍 규칙 적용)
 
 ## References
 

@@ -28,7 +28,6 @@ export interface DashboardStackProps extends cdk.StackProps {
   sgOpen: ec2.ISecurityGroup;
   sgRestricted: ec2.ISecurityGroup;
   sgLocked: ec2.ISecurityGroup;
-  efsFileSystemId: string;
   ecsInfrastructureRoleArn?: string;
   webAclArn?: string;
   dnsFirewallRuleGroupId?: string;
@@ -297,7 +296,6 @@ export class DashboardStack extends cdk.Stack {
         SG_DEVENV_RESTRICTED: props.sgRestricted.securityGroupId,
         SG_DEVENV_LOCKED: props.sgLocked.securityGroupId,
         S3_SYNC_BUCKET: `${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
-        EFS_FILE_SYSTEM_ID: props.efsFileSystemId,
         ROUTING_TABLE: 'cc-routing-table',
         DLP_DOMAIN_LIST_TABLE: 'cc-dlp-domain-lists',
         DNS_FIREWALL_RULE_GROUP_ID: props.dnsFirewallRuleGroupId ?? '',

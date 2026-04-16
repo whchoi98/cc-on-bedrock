@@ -11,7 +11,7 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 7 stacks.
 - `lib/01-network-stack.ts` - VPC, Subnets, NAT, VPC Endpoints, Route 53
 - `lib/02-security-stack.ts` - Cognito (Hosted UI domain 포함), ACM, KMS, Secrets Manager, IAM
 - `lib/03-usage-tracking-stack.ts` - DynamoDB (사용량 저장), Lambda (EventBridge 트리거), EventBridge Rules
-- `lib/04-ecs-devenv-stack.ts` - ECS Cluster, NLB+Nginx, DynamoDB Routing, EFS, CloudFront
+- `lib/04-ecs-devenv-stack.ts` - ECS Cluster, NLB+Nginx, DynamoDB Routing, CloudFront
 - `lib/05-dashboard-stack.ts` - Dashboard EC2 ASG, ALB, CloudFront
 - `lib/06-waf-stack.ts` - WAF WebACL (CloudFront, ALB)
 - `lib/07-ec2-devenv-stack.ts` - EC2-per-user DevEnv: Launch Template, DLP SG(open/restricted/locked), IAM Role, Instance Profile, DynamoDB(cc-user-instances)
@@ -20,8 +20,7 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 7 stacks.
 - `lib/lambda/bedrock-usage-tracker.py` - Bedrock API 호출 추적 (EventBridge → DynamoDB)
 - `lib/lambda/budget-check.py` - 예산 초과 확인 (5분 주기, IAM Deny Policy 동적 부착)
 - `lib/lambda/nginx-config-gen.py` - Nginx 설정 생성 (DynamoDB Stream → S3). 유저당 3 upstream: code-server(8080), frontend(3000), API(8000)
-- `lib/lambda/ec2-idle-stop.py` - EC2 유휴 자동 중지
-- `lib/lambda/ebs-lifecycle.py` - EBS 볼륨 라이프사이클 관리
+- `lib/lambda/ec2-idle-stop.py` - EC2 유휴 자동 중지 + Hibernate 지원 (ADR-010)
 - `lib/lambda/gateway-manager.py` - MCP Gateway 관리
 - `lib/lambda/audit-logger.py` - 감사 로그
 
