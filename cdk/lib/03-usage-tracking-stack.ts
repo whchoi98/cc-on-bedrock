@@ -222,13 +222,14 @@ export class UsageTrackingStack extends cdk.Stack {
         IDLE_THRESHOLD_MINUTES: '30',
         SNS_TOPIC_ARN: alertTopic.topicArn,
         EOD_SHUTDOWN_ENABLED: 'true',
+        HIBERNATE_ENABLED: 'false',  // ADR-010: Enable after Phase 0 verification
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
     });
 
-    // EC2 idle-stop permissions
+    // EC2 idle-stop permissions (StartInstances needed for ADR-010 hibernate rotation)
     ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ec2:DescribeInstances', 'ec2:StopInstances'],
+      actions: ['ec2:DescribeInstances', 'ec2:StopInstances', 'ec2:StartInstances'],
       resources: ['*'],
     }));
     ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
@@ -262,6 +263,16 @@ export class UsageTrackingStack extends cdk.Stack {
     });
     ec2EodRule.addTarget(new targets.LambdaFunction(ec2IdleStopLambda, {
       event: events.RuleTargetInput.fromObject({ action: 'schedule_shutdown' }),
+    }));
+
+    // ADR-010: Hibernate expiry rotation (daily at 03:00 UTC / 12:00 KST)
+    const hibernateExpiryRule = new events.Rule(this, 'HibernateExpiryRule', {
+      ruleName: 'cc-ec2-hibernate-expiry',
+      description: 'Rotate hibernated instances approaching AWS 60-day limit',
+      schedule: events.Schedule.cron({ hour: '3', minute: '0' }),
+    });
+    hibernateExpiryRule.addTarget(new targets.LambdaFunction(ec2IdleStopLambda, {
+      event: events.RuleTargetInput.fromObject({ action: 'check_hibernate_expiry' }),
     }));
 
     // Audit Logger Lambda

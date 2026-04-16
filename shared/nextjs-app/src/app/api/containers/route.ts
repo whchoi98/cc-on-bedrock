@@ -19,11 +19,13 @@ export async function GET(req: NextRequest) {
 
   try {
     const instances = await listInstances();
-    const mapped = instances.map(i => ({
+    const mapped = instances.map(i => {
+      const apiStatus = i.status === "hibernated" ? "HIBERNATED" : i.status.toUpperCase();
+      return {
       taskArn: i.instanceId,
       taskId: i.instanceId,
-      status: i.status.toUpperCase(),
-      desiredStatus: i.status.toUpperCase(),
+      status: apiStatus,
+      desiredStatus: apiStatus,
       username: i.username,
       subdomain: i.subdomain,
       containerOs: "ubuntu" as const,
@@ -31,7 +33,7 @@ export async function GET(req: NextRequest) {
       securityPolicy: i.securityPolicy,
       privateIp: i.privateIp,
       healthStatus: i.status === "running" ? "HEALTHY" : "UNKNOWN",
-    }));
+    }});
 
     if (instanceId) {
       const found = mapped.find(m => m.taskArn === instanceId);

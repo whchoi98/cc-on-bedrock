@@ -129,12 +129,13 @@ export class Ec2DevenvStack extends cdk.Stack {
       // No role here — per-user instance profile is set at RunInstances time
       securityGroup: this.sgOpen,
       requireImdsv2: true,
+      hibernationConfigured: true,  // ADR-010: Enable EC2 Hibernation
       blockDevices: [{
         deviceName: '/dev/sda1',
         volume: ec2.BlockDeviceVolume.ebs(30, {
           volumeType: ec2.EbsDeviceVolumeType.GP3,
-          encrypted: true,
-          deleteOnTermination: false,  // Preserve data on Stop
+          encrypted: true,             // Required for Hibernation
+          deleteOnTermination: false,   // Preserve data on Stop/Hibernate
         }),
       }],
     });

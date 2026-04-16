@@ -33,6 +33,8 @@ ROUTING_TABLE = os.environ.get("ROUTING_TABLE", "cc-routing-table")
 USAGE_TABLE = os.environ.get("USAGE_TABLE", "cc-on-bedrock-usage")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 EOD_SHUTDOWN_ENABLED = os.environ.get("EOD_SHUTDOWN_ENABLED", "true")
+HIBERNATE_ENABLED = os.environ.get("HIBERNATE_ENABLED", "false").lower() == "true"
+HIBERNATE_MAX_DAYS = 55  # AWS limit is 60 days; rotate at 55 for safety
 
 ec2 = boto3.client("ec2", region_name=REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=REGION)
@@ -51,6 +53,8 @@ def handler(event: dict, context: Any) -> dict:
             return check_idle()
         elif action == "schedule_shutdown":
             return schedule_shutdown()
+        elif action == "check_hibernate_expiry":
+            return check_hibernate_expiry()
         else:
             return {"statusCode": 400, "body": f"Unknown action: {action}"}
     except Exception as e:
@@ -252,7 +256,7 @@ def is_keep_alive_active(subdomain: str) -> bool:
 
 
 def stop_devenv_instance(instance_id: str, subdomain: str):
-    """Stop instance and deregister route."""
+    """Stop (or hibernate) instance and deregister route."""
     # Deregister Nginx route
     try:
         routing = dynamodb.Table(ROUTING_TABLE)
@@ -260,22 +264,106 @@ def stop_devenv_instance(instance_id: str, subdomain: str):
     except Exception as e:
         logger.warning(f"Route deregister failed for {subdomain}: {e}")
 
-    # Stop EC2 instance (EBS preserved automatically)
-    ec2.stop_instances(InstanceIds=[instance_id])
+    # ADR-010: Hibernate if enabled and instance supports it
+    should_hibernate = False
+    if HIBERNATE_ENABLED:
+        try:
+            desc = ec2.describe_instances(InstanceIds=[instance_id])
+            should_hibernate = desc["Reservations"][0]["Instances"][0].get(
+                "HibernationOptions", {}).get("Configured", False)
+        except Exception:
+            should_hibernate = False
+
+    try:
+        ec2.stop_instances(InstanceIds=[instance_id], Hibernate=should_hibernate)
+    except ClientError as e:
+        if should_hibernate:
+            logger.warning(f"Hibernate failed for {instance_id}, falling back to stop: {e}")
+            ec2.stop_instances(InstanceIds=[instance_id])
+            should_hibernate = False
+        else:
+            raise
 
     # Update DynamoDB
+    status = "hibernated" if should_hibernate else "stopped"
     try:
+        update_expr = "SET #st = :status, updatedAt = :ts"
+        expr_values = {
+            ":status": status,
+            ":ts": datetime.utcnow().isoformat(),
+        }
+        if should_hibernate:
+            update_expr += ", hibernatedAt = :hat"
+            expr_values[":hat"] = datetime.utcnow().isoformat()
         table.update_item(
             Key={"user_id": subdomain},
-            UpdateExpression="SET #st = :status, updatedAt = :ts",
+            UpdateExpression=update_expr,
             ExpressionAttributeNames={"#st": "status"},
-            ExpressionAttributeValues={
-                ":status": "stopped",
-                ":ts": datetime.utcnow().isoformat(),
-            },
+            ExpressionAttributeValues=expr_values,
         )
     except Exception as e:
         logger.warning(f"DynamoDB update failed for {subdomain}: {e}")
+
+
+def check_hibernate_expiry() -> dict:
+    """Rotate instances hibernated > HIBERNATE_MAX_DAYS to avoid AWS 60-day limit.
+
+    Scans DynamoDB for status=hibernated with hibernatedAt older than HIBERNATE_MAX_DAYS.
+    For each: Start → wait for running → Re-Hibernate → update hibernatedAt.
+    """
+    if not HIBERNATE_ENABLED:
+        return {"statusCode": 200, "body": {"message": "Hibernate disabled"}}
+
+    cutoff = (datetime.utcnow() - timedelta(days=HIBERNATE_MAX_DAYS)).isoformat()
+    rotated = []
+    errors = []
+
+    # Scan for hibernated instances past expiry
+    try:
+        resp = table.scan(
+            FilterExpression="#st = :status AND hibernatedAt < :cutoff",
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={":status": "hibernated", ":cutoff": cutoff},
+        )
+    except Exception as e:
+        logger.error(f"DynamoDB scan failed: {e}")
+        return {"statusCode": 500, "body": str(e)}
+
+    for item in resp.get("Items", []):
+        subdomain = item["user_id"]
+        instance_id = item.get("instanceId", "")
+        if not instance_id:
+            continue
+
+        try:
+            # Start instance (resume from hibernate)
+            logger.info(f"Rotating hibernated instance {instance_id} ({subdomain})")
+            ec2.start_instances(InstanceIds=[instance_id])
+
+            # Wait for running state (up to 2 min)
+            waiter = ec2.get_waiter("instance_running")
+            waiter.wait(InstanceIds=[instance_id], WaiterConfig={"Delay": 10, "MaxAttempts": 12})
+
+            # Re-hibernate
+            ec2.stop_instances(InstanceIds=[instance_id], Hibernate=True)
+
+            # Update hibernatedAt
+            table.update_item(
+                Key={"user_id": subdomain},
+                UpdateExpression="SET hibernatedAt = :hat, updatedAt = :ts",
+                ExpressionAttributeValues={
+                    ":hat": datetime.utcnow().isoformat(),
+                    ":ts": datetime.utcnow().isoformat(),
+                },
+            )
+            rotated.append({"instanceId": instance_id, "subdomain": subdomain})
+        except Exception as e:
+            logger.error(f"Rotation failed for {instance_id} ({subdomain}): {e}")
+            errors.append({"instanceId": instance_id, "subdomain": subdomain, "error": str(e)})
+
+    result = {"rotated": rotated, "errors": errors}
+    logger.info(f"Hibernate rotation: {json.dumps(result)}")
+    return {"statusCode": 200, "body": result}
 
 
 def send_warning(subdomain: str, idle_minutes: int):
