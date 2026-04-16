@@ -1,12 +1,12 @@
 /**
- * Usage Tracking Client — DynamoDB-based usage analytics
+ * Usage Tracking Client (replaces litellm-client.ts)
  * Reads from DynamoDB cc-on-bedrock-usage table
  * Data source: Bedrock Invocation Logging → Lambda → DynamoDB
  */
 import {
   DynamoDBClient,
-  QueryCommand,
   ScanCommand,
+  QueryCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
@@ -15,6 +15,7 @@ const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const TABLE_NAME = process.env.USAGE_TABLE_NAME ?? "cc-on-bedrock-usage";
 
 const dynamodb = new DynamoDBClient({ region });
+const MAX_PAGES = 100;
 
 // ─── Types ───
 
@@ -69,7 +70,7 @@ export interface DailyUsage {
   estimatedCost: number;
 }
 
-// ─── Internal: parse DynamoDB item to UsageRecord ───
+// ─── Query Functions ───
 
 function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
   const u = unmarshall(item);
@@ -87,121 +88,82 @@ function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
   };
 }
 
-// ─── Query Functions ───
-
-async function queryByUser(userId: string, startDate?: string, endDate?: string): Promise<UsageRecord[]> {
-  const keyCondition = startDate || endDate
-    ? "PK = :pk AND #d BETWEEN :start AND :end"
-    : "PK = :pk";
-
-  const exprValues: Record<string, AttributeValue> = {
-    ":pk": { S: `USER#${userId}` },
-  };
-  if (startDate || endDate) {
-    exprValues[":start"] = { S: startDate ?? "2020-01-01" };
-    exprValues[":end"] = { S: endDate ?? "2099-12-31" };
-  }
-
-  const items: Record<string, AttributeValue>[] = [];
-  let lastKey: Record<string, AttributeValue> | undefined;
-
-  do {
-    const result = await dynamodb.send(new QueryCommand({
-      TableName: TABLE_NAME,
-      IndexName: "user-date-index",
-      KeyConditionExpression: keyCondition,
-      ExpressionAttributeValues: exprValues,
-      ...(startDate || endDate ? { ExpressionAttributeNames: { "#d": "date" } } : {}),
-      ExclusiveStartKey: lastKey,
-    }));
-    items.push(...(result.Items ?? []));
-    lastKey = result.LastEvaluatedKey;
-  } while (lastKey);
-
-  return items.map(toUsageRecord);
-}
-
-async function queryByDepartment(department: string, startDate?: string, endDate?: string): Promise<UsageRecord[]> {
-  const keyCondition = startDate || endDate
-    ? "department = :dept AND #d BETWEEN :start AND :end"
-    : "department = :dept";
-
-  const exprValues: Record<string, AttributeValue> = {
-    ":dept": { S: department },
-  };
-  if (startDate || endDate) {
-    exprValues[":start"] = { S: startDate ?? "2020-01-01" };
-    exprValues[":end"] = { S: endDate ?? "2099-12-31" };
-  }
-
-  const items: Record<string, AttributeValue>[] = [];
-  let lastKey: Record<string, AttributeValue> | undefined;
-
-  do {
-    const result = await dynamodb.send(new QueryCommand({
-      TableName: TABLE_NAME,
-      IndexName: "department-date-index",
-      KeyConditionExpression: keyCondition,
-      ExpressionAttributeValues: exprValues,
-      ...(startDate || endDate ? { ExpressionAttributeNames: { "#d": "date" } } : {}),
-      ExclusiveStartKey: lastKey,
-    }));
-    items.push(...(result.Items ?? []));
-    lastKey = result.LastEvaluatedKey;
-  } while (lastKey);
-
-  return items.map(toUsageRecord);
-}
-
-async function scanAllRecords(startDate?: string, endDate?: string): Promise<UsageRecord[]> {
-  const filterParts: string[] = ["begins_with(PK, :userPrefix)"];
-  const exprValues: Record<string, AttributeValue> = {
-    ":userPrefix": { S: "USER#" },
-  };
-
-  if (startDate) {
-    filterParts.push("#d >= :startDate");
-    exprValues[":startDate"] = { S: startDate };
-  }
-  if (endDate) {
-    filterParts.push("#d <= :endDate");
-    exprValues[":endDate"] = { S: endDate };
-  }
-
-  const needsDateAlias = startDate || endDate;
-  const items: Record<string, AttributeValue>[] = [];
-  let lastKey: Record<string, AttributeValue> | undefined;
-
-  do {
-    const result = await dynamodb.send(new ScanCommand({
-      TableName: TABLE_NAME,
-      FilterExpression: filterParts.join(" AND "),
-      ExpressionAttributeValues: exprValues,
-      ...(needsDateAlias ? { ExpressionAttributeNames: { "#d": "date" } } : {}),
-      ExclusiveStartKey: lastKey,
-    }));
-    items.push(...(result.Items ?? []));
-    lastKey = result.LastEvaluatedKey;
-  } while (lastKey);
-
-  return items.map(toUsageRecord);
-}
-
 export async function getUsageRecords(params?: {
   startDate?: string;
   endDate?: string;
   userId?: string;
   department?: string;
 }): Promise<UsageRecord[]> {
-  // Route to the most efficient query path
+  // When userId is known, use Query (single partition) instead of Scan
   if (params?.userId) {
-    return queryByUser(params.userId, params?.startDate, params?.endDate);
+    const keyParts = ["PK = :pk"];
+    const exprValues: Record<string, AttributeValue> = {
+      ":pk": { S: `USER#${params.userId}` },
+    };
+    if (params.startDate && params.endDate) {
+      keyParts.push("SK BETWEEN :start AND :end");
+      exprValues[":start"] = { S: params.startDate };
+      exprValues[":end"] = { S: `${params.endDate}~` };
+    } else if (params.startDate) {
+      keyParts.push("SK >= :start");
+      exprValues[":start"] = { S: params.startDate };
+    } else if (params.endDate) {
+      keyParts.push("SK <= :end");
+      exprValues[":end"] = { S: `${params.endDate}~` };
+    }
+
+    const items: Record<string, AttributeValue>[] = [];
+    let lastKey: Record<string, AttributeValue> | undefined;
+    let pages = 0;
+    do {
+      const result = await dynamodb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: keyParts.join(" AND "),
+        ExpressionAttributeValues: exprValues,
+        ExclusiveStartKey: lastKey,
+      }));
+      items.push(...(result.Items ?? []));
+      lastKey = result.LastEvaluatedKey;
+      pages++;
+    } while (lastKey && pages < MAX_PAGES);
+
+    return items.map(toUsageRecord);
+  }
+
+  // No userId: paginated Scan with optional filters
+  const filterParts: string[] = ["begins_with(PK, :userPrefix)"];
+  const exprValues: Record<string, AttributeValue> = {
+    ":userPrefix": { S: "USER#" },
+  };
+  if (params?.startDate) {
+    filterParts.push("SK >= :startDate");
+    exprValues[":startDate"] = { S: params.startDate };
+  }
+  if (params?.endDate) {
+    filterParts.push("SK <= :endDate");
+    exprValues[":endDate"] = { S: `${params.endDate}~` };
   }
   if (params?.department) {
-    return queryByDepartment(params.department, params?.startDate, params?.endDate);
+    filterParts.push("department = :dept");
+    exprValues[":dept"] = { S: params.department };
   }
-  // Fallback: full scan (admin totals only)
-  return scanAllRecords(params?.startDate, params?.endDate);
+
+  const items: Record<string, AttributeValue>[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
+  do {
+    const result = await dynamodb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: filterParts.join(" AND "),
+      ExpressionAttributeValues: exprValues,
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+    pages++;
+  } while (lastKey && pages < MAX_PAGES);
+
+  return items.map(toUsageRecord);
 }
 
 export async function getUserSummaries(params?: {
