@@ -679,7 +679,7 @@ export async function listInstances(): Promise<InstanceInfo[]> {
       instanceId: r.instanceId,
       subdomain: r.user_id,
       username: r.username ?? "",
-      status: ec2Info.status,
+      status: ec2Info.status === "stopped" && r.status === "hibernated" ? "hibernated" : ec2Info.status,
       privateIp: ec2Info.privateIp,
       instanceType: ec2Info.instanceType,
       securityPolicy: r.securityPolicy ?? "open",
