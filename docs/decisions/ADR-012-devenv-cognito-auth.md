@@ -1,4 +1,4 @@
-# ADR-006: DevEnv Cognito Authentication via Lambda@Edge
+# ADR-012: DevEnv Cognito Authentication via Lambda@Edge
 
 ## Status
 Accepted

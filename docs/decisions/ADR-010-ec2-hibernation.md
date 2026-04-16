@@ -1,7 +1,7 @@
 # ADR-010: EC2 Hibernation for DevEnv Instances
 
 ## Status
-Accepted (Phase 0 검증 완료 2026-04-16)
+Accepted (Phase 4 — HIBERNATE_ENABLED=true 전환 완료 2026-04-16)
 
 ## Context
 
@@ -91,12 +91,12 @@ AWS EC2 Hibernation은 RAM 내용을 암호화된 EBS 루트 볼륨에 저장하
 
 ### Rollout 순서
 
-1. **Phase 0**: Ubuntu 24.04 ARM64 + Hibernate 수동 검증 (BLOCKING)
-2. **Phase 1**: AMI 빌드 (`ec2-hibinit-agent` + KASLR) → SSM param 업데이트
-3. **Phase 2**: CDK + 앱 코드 배포 (`HIBERNATE_ENABLED=false` — 코드만 배포, 비활성)
-4. **Phase 3**: 테스트 인스턴스에서 `HIBERNATE_ENABLED=true` 수동 검증
-5. **Phase 4**: 전체 `HIBERNATE_ENABLED=true` 전환
-6. **Phase 5**: UI 업데이트 (HIBERNATED 상태 표시)
+1. **Phase 0**: Ubuntu 24.04 ARM64 + Hibernate 수동 검증 (BLOCKING) — ✅ 완료 2026-04-16
+2. **Phase 1**: AMI 빌드 (`ec2-hibinit-agent` + KASLR) → SSM param 업데이트 — ✅ 완료 (build-ami.sh)
+3. **Phase 2**: CDK + 앱 코드 배포 (`HIBERNATE_ENABLED=false` — 코드만 배포, 비활성) — ✅ 완료
+4. **Phase 3**: 테스트 인스턴스에서 `HIBERNATE_ENABLED=true` 수동 검증 — ✅ Phase 0에서 통합 검증
+5. **Phase 4**: 전체 `HIBERNATE_ENABLED=true` 전환 — ✅ 완료 2026-04-16 (Stack 03 + Stack 05)
+6. **Phase 5**: UI 업데이트 (HIBERNATED 상태 표시) — ✅ 완료 (environment-tab.tsx, container route)
 
 ## Consequences
 

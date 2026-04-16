@@ -361,7 +361,7 @@ API:      https://admin.dev.atomai.click/api/
 
 ## References
 - [ADR-002: NLB+Nginx Routing](ADR-002-nlb-nginx-routing.md) — ALB 100 rule 제한 → NLB+Nginx 결정
-- [ADR-006: DevEnv Cognito Auth](ADR-006-devenv-cognito-auth.md) — Lambda@Edge + Nginx defense-in-depth
+- [ADR-012: DevEnv Cognito Auth](ADR-012-devenv-cognito-auth.md) — Lambda@Edge + Nginx defense-in-depth
 - `cdk/lib/lambda/nginx-config-gen.py` — 현재 Nginx config 생성 로직
 - `cdk/lib/04-ecs-devenv-stack.ts` — CloudFront + NLB + Nginx ECS 정의
 - code-server docs: `--base-path` 옵션 제한사항

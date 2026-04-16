@@ -222,7 +222,7 @@ export class UsageTrackingStack extends cdk.Stack {
         IDLE_THRESHOLD_MINUTES: '30',
         SNS_TOPIC_ARN: alertTopic.topicArn,
         EOD_SHUTDOWN_ENABLED: 'true',
-        HIBERNATE_ENABLED: 'false',  // ADR-010: Enable after Phase 0 verification
+        HIBERNATE_ENABLED: 'true',  // ADR-010: Phase 0 verified, enabled 2026-04-16
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
     });
