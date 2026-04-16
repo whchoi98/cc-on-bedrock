@@ -1,7 +1,7 @@
 # ADR-010: EC2 Hibernation for DevEnv Instances
 
 ## Status
-Proposed
+Accepted (Phase 0 검증 완료 2026-04-16)
 
 ## Context
 
@@ -111,8 +111,29 @@ AWS EC2 Hibernation은 RAM 내용을 암호화된 EBS 루트 볼륨에 저장하
 - AMI 업데이트 필요 (hibernation agent + KASLR 비활성화)
 - 기존 실행 중 인스턴스는 Terminate+Recreate 전까지 Hibernate 불가 (Launch 시점 설정)
 - 60일 Hibernate 제한으로 rotation Lambda 필요 (Start→Re-Hibernate 사이클)
-- Ubuntu 24.04 ARM64의 Hibernate 공식 지원이 불확실 (검증 실패 시 OS 전환 필요)
 - Hibernate 상태에서 인스턴스 타입 변경(changeTier) 불가 → 일반 Stop 필요 (자동 처리)
+
+### Phase 0 검증 결과 (2026-04-16)
+
+**환경**: t4g.large + Ubuntu 24.04 ARM64 (ami-071fb435e51ab8763) + GP3 30GB encrypted
+
+| 항목 | 결과 |
+|------|------|
+| ec2-hibinit-agent 설치 | OK — swap offset 자동 설정 |
+| GRUB nokaslr + resume_offset | OK — 커널 파라미터 적용 확인 |
+| HibernationOptions.Configured | true (IMDS 확인) |
+| Hibernate → Stop 전환 | OK — 에러 없음 |
+| Resume → Running 전환 | OK — 에러 없음 |
+| 파일시스템 보존 | OK — /home/ubuntu/ 마커 파일 보존 확인 |
+| 백그라운드 프로세스 보존 | OK — tick 로그 168건 기록 확인 |
+| hibernate.target 트리거 | OK — resume 시 systemd 서비스 실행 확인 |
+| **SSM Agent 재연결** | **FAIL** — snap/deb 모두 실패, reboot 필요 |
+
+**SSM 재연결 문제 대응**:
+- snap SSM agent → deb 패키지로 교체 (snap confinement 관련 추가 이슈 방지)
+- hibernate.target 기반 restart hook 설치 (SSM + CloudWatch + code-server)
+- SSM 재연결은 관리 채널 문제로, 사용자 UX(code-server 8080)에는 영향 없음
+- 필요 시 Dashboard API에서 `rebootInstances` 호출로 SSM 복구 가능
 
 ## References
 - AWS EC2 Hibernation: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-hibernate-overview.html
