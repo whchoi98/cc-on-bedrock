@@ -1,9 +1,9 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import ContainerManagement from "./container-management";
+import McpManagement from "./mcp-management";
 
-export default async function ContainersPage() {
+export default async function McpPage() {
   const session = await getServerSession(authOptions);
   if (!session) redirect("/api/auth/signin");
   if (!session.user.isAdmin) redirect("/analytics");
@@ -11,17 +11,12 @@ export default async function ContainersPage() {
   return (
     <div>
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-100">
-          Container Management
-        </h1>
+        <h1 className="text-2xl font-bold text-gray-100">MCP Gateway Management</h1>
         <p className="mt-1 text-sm text-gray-400">
-          Start, stop, and manage ECS dev environment containers
+          Manage MCP tool catalog and department gateway assignments
         </p>
       </div>
-      <ContainerManagement
-        domainName={process.env.DOMAIN_NAME ?? "example.com"}
-        devSubdomain={process.env.DEV_SUBDOMAIN ?? "dev"}
-      />
+      <McpManagement />
     </div>
   );
 }

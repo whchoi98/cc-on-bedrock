@@ -19,7 +19,7 @@ export default function ProvisioningProgress({ tier, os, onComplete, onError }: 
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
 
-  const progressPercent = Math.max(5, (currentStep / 6) * 100);
+  const progressPercent = Math.max(5, (currentStep / 7) * 100);
 
   const handleCancel = useCallback(() => {
     if (abortRef.current) {
@@ -77,9 +77,10 @@ export default function ProvisioningProgress({ tier, os, onComplete, onError }: 
                 return next;
               });
 
-              if (event.status === "in_progress") {
-                setCurrentStep(event.step);
-              } else if (event.status === "completed" && event.step === 6) {
+              if (event.status === "in_progress" || event.status === "completed") {
+                setCurrentStep(prev => Math.max(prev, event.step));
+              }
+              if (event.status === "completed" && event.step === 7) {
                 setCompleted(true);
                 setTimeout(() => onComplete(event.url), 1500);
               } else if (event.status === "failed") {

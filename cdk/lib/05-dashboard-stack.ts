@@ -1,7 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as route53 from 'aws-cdk-lib/aws-route53';
@@ -9,8 +10,10 @@ import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
-import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import { CcOnBedrockConfig } from '../config/default';
 
@@ -18,29 +21,63 @@ export interface DashboardStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
-  dashboardEc2Role: iam.Role;
   dashboardCertificateArn?: string;
-  hostedZone: route53.IHostedZone;
-  cloudfrontSecret: secretsmanager.Secret;
+  cloudfrontCertificateArn?: string;
+  hostedZone?: route53.IHostedZone;
   userPool: cognito.UserPool;
-  userPoolClient: cognito.UserPoolClient;
+  sgOpen: ec2.ISecurityGroup;
+  sgRestricted: ec2.ISecurityGroup;
+  sgLocked: ec2.ISecurityGroup;
+  efsFileSystemId: string;
+  ecsInfrastructureRoleArn?: string;
+  webAclArn?: string;
+  dnsFirewallRuleGroupId?: string;
 }
 
 export class DashboardStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DashboardStackProps) {
     super(scope, id, props);
 
-    const { config, vpc, encryptionKey, dashboardEc2Role,
-            dashboardCertificateArn, hostedZone, cloudfrontSecret,
-            userPool, userPoolClient } = props;
+    const { config, vpc, encryptionKey,
+            dashboardCertificateArn, cloudfrontCertificateArn,
+            userPool, webAclArn } = props;
 
-    // Dashboard EC2 Role - additional permissions for all dashboard features
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'BedrockAccess',
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
+    // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
+    const hostedZone = config.hostedZoneId
+      ? route53.HostedZone.fromHostedZoneAttributes(this, 'ImportedHostedZone', {
+          hostedZoneId: config.hostedZoneId,
+          zoneName: config.domainName,
+        })
+      : props.hostedZone!;
+
+    // ─── Dashboard Role (import directly — avoids cross-stack export dependency on Security stack) ───
+    const dashboardEc2Role = iam.Role.fromRoleName(this, 'ImportedDashboardRole', 'cc-on-bedrock-dashboard-ec2');
+
+    // ─── Dashboard Role Permissions ───
+
+    // SSM Parameter Store - read Cognito credentials
+    const dashboardPolicy = new iam.Policy(this, 'DashboardExtraPolicy', {
+      roles: [dashboardEc2Role],
+    });
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'SsmParameterRead',
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: [`arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/*`],
     }));
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'BedrockAccess',
+      actions: [
+        'bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream',
+        'bedrock:Converse', 'bedrock:ConverseStream',
+      ],
+      resources: [
+        `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-*`,
+        `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+      ],
+    }));
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'AgentCoreAccess',
       actions: [
         'bedrock-agentcore:InvokeAgentRuntime',
@@ -51,43 +88,256 @@ export class DashboardStack extends cdk.Stack {
       ],
       resources: ['*'],
     }));
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'CloudWatchAccess',
       actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics', 'cloudwatch:GetMetricStatistics'],
       resources: ['*'],
     }));
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'DynamoDBRouting',
-      actions: ['dynamodb:PutItem', 'dynamodb:DeleteItem', 'dynamodb:GetItem', 'dynamodb:Scan'],
-      resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`],
-    }));
-    dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
       sid: 'SecurityDashboard',
       actions: [
         'cloudtrail:LookupEvents',
         'route53resolver:ListFirewallRuleGroupAssociations',
         'route53resolver:ListFirewallRules',
         'route53resolver:ListFirewallDomainLists',
+        'route53resolver:ListFirewallDomains',
         'route53resolver:GetFirewallDomainList',
         'route53resolver:GetFirewallRuleGroup',
         'ec2:DescribeSecurityGroups',
       ],
       resources: ['*'],
     }));
+    dashboardPolicy.addStatements(new iam.PolicyStatement({
+      sid: 'DlpDnsFirewallManagement',
+      actions: [
+        'route53resolver:CreateFirewallDomainList',
+        'route53resolver:DeleteFirewallDomainList',
+        'route53resolver:UpdateFirewallDomains',
+        'route53resolver:CreateFirewallRule',
+        'route53resolver:DeleteFirewallRule',
+        'route53resolver:UpdateFirewallRule',
+      ],
+      resources: ['*'],
+    }));
 
-    // Security Group
+    // ─── Dashboard Core Permissions (Cognito, ECS, EFS, ELB, Secrets, DynamoDB, KMS, Lambda) ───
+    const corePolicy = new iam.Policy(this, 'DashboardCorePolicy', {
+      roles: [dashboardEc2Role],
+    });
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'CognitoAdmin',
+      actions: [
+        'cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser',
+        'cognito-idp:AdminGetUser', 'cognito-idp:AdminSetUserPassword',
+        'cognito-idp:AdminEnableUser', 'cognito-idp:AdminDisableUser',
+        'cognito-idp:ListUsers',
+      ],
+      resources: [userPool.userPoolArn],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'EcsManagement',
+      actions: [
+        'ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks',
+        'ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition', 'ecs:DeregisterTaskDefinition',
+        'ecs:DescribeClusters', 'ecs:ListServices', 'ecs:DescribeServices',
+        'ecs:DescribeContainerInstances', 'ecs:ListContainerInstances',
+      ],
+      resources: ['*'],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'EfsAccess',
+      actions: [
+        'elasticfilesystem:DescribeFileSystems', 'elasticfilesystem:DescribeMountTargets',
+        'elasticfilesystem:CreateAccessPoint', 'elasticfilesystem:DescribeAccessPoints',
+        'elasticfilesystem:DeleteAccessPoint',
+      ],
+      resources: ['*'],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'ElbManagement',
+      actions: [
+        'elasticloadbalancing:CreateTargetGroup', 'elasticloadbalancing:DeleteTargetGroup',
+        'elasticloadbalancing:RegisterTargets', 'elasticloadbalancing:DeregisterTargets',
+        'elasticloadbalancing:DescribeTargetGroups', 'elasticloadbalancing:DescribeTargetHealth',
+        'elasticloadbalancing:CreateRule', 'elasticloadbalancing:DeleteRule',
+        'elasticloadbalancing:DescribeListeners', 'elasticloadbalancing:ModifyRule',
+      ],
+      resources: ['*'],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'SecretsManager',
+      actions: [
+        'secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue',
+        'secretsmanager:UpdateSecret', 'secretsmanager:DeleteSecret',
+        'secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret',
+      ],
+      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'DynamoDBAccess',
+      actions: [
+        'dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem',
+        'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem',
+        'dynamodb:BatchWriteItem',
+      ],
+      resources: [
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-usage`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`,
+        `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dlp-domain-lists`,
+      ],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'KmsAccess',
+      actions: ['kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey'],
+      resources: [encryptionKey.keyArn],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'LambdaInvoke',
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`],
+    }));
+    corePolicy.addStatements(new iam.PolicyStatement({
+      sid: 'PassRoleEcs',
+      actions: ['iam:PassRole'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task`],
+    }));
+
+    // ─── Security Groups ───
     const albSg = new ec2.SecurityGroup(this, 'DashboardAlbSg', {
       vpc, description: 'Dashboard ALB SG', allowAllOutbound: true,
     });
-    // CloudFront managed prefix list (region-specific, from config)
-    albSg.addIngressRule(ec2.Peer.prefixList(config.cloudfrontPrefixListId), ec2.Port.tcp(443), 'Allow CloudFront');
+    albSg.addIngressRule(
+      ec2.Peer.prefixList(config.cloudfrontPrefixListId),
+      dashboardCertificateArn ? ec2.Port.tcp(443) : ec2.Port.tcp(80),
+      'Allow CloudFront',
+    );
 
-    const ec2Sg = new ec2.SecurityGroup(this, 'DashboardEc2Sg', {
-      vpc, description: 'Dashboard EC2 SG', allowAllOutbound: true,
+    const taskSg = new ec2.SecurityGroup(this, 'DashboardTaskSg', {
+      vpc, description: 'Dashboard ECS Task SG (awsvpc)', allowAllOutbound: true,
     });
-    ec2Sg.addIngressRule(albSg, ec2.Port.tcp(3000), 'Allow from ALB');
+    taskSg.addIngressRule(albSg, ec2.Port.tcp(3000), 'Allow from ALB');
 
-    // ALB
+    // ─── ECS Cluster (import by name — avoids cross-stack export) ───
+    const cluster = ecs.Cluster.fromClusterAttributes(this, 'ImportedCluster', {
+      clusterName: config.ecsClusterName,
+      vpc,
+      securityGroups: [],
+    });
+
+    // ─── Task Execution Role (ECR pull, log writes, secret injection) ───
+    const taskExecutionRole = new iam.Role(this, 'DashboardTaskExecutionRole', {
+      roleName: 'cc-on-bedrock-dashboard-task-execution',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
+      ],
+    });
+    taskExecutionRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
+    }));
+    taskExecutionRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameters'],
+      resources: [`arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/*`],
+    }));
+    taskExecutionRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['kms:Decrypt'],
+      resources: [encryptionKey.keyArn],
+    }));
+
+    // ─── ECR Repository (import existing) ───
+    const dashboardRepo = ecr.Repository.fromRepositoryName(this, 'DashboardRepo', 'cc-on-bedrock/dashboard');
+
+    // ─── Log Group ───
+    const logGroup = new logs.LogGroup(this, 'DashboardLogGroup', {
+      logGroupName: '/cc-on-bedrock/ecs/dashboard',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // ─── Task Definition (EC2 + awsvpc for per-task ENI) ───
+    const taskDef = new ecs.Ec2TaskDefinition(this, 'DashboardTaskDef', {
+      family: 'cc-dashboard',
+      networkMode: ecs.NetworkMode.AWS_VPC,
+      taskRole: dashboardEc2Role,
+      executionRole: taskExecutionRole,
+    });
+
+    const nextAuthSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'NextAuthSecret',
+      `arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/nextauth-secret-zk4Tnm`);
+
+    taskDef.addContainer('dashboard', {
+      image: ecs.ContainerImage.fromEcrRepository(dashboardRepo, 'latest'),
+      cpu: 4096,
+      memoryLimitMiB: 15360,
+      essential: true,
+      logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: 'dashboard' }),
+      environment: {
+        NODE_ENV: 'production',
+        PORT: '3000',
+        HOSTNAME: '0.0.0.0',
+        NEXTAUTH_URL: `https://${config.dashboardSubdomain}.${config.domainName}`,
+        COGNITO_ISSUER: `https://cognito-idp.${cdk.Aws.REGION}.amazonaws.com/${userPool.userPoolId}`,
+        AWS_REGION: cdk.Aws.REGION,
+        ECS_CLUSTER_NAME: config.ecsClusterName,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        DOMAIN_NAME: config.domainName,
+        DEV_SUBDOMAIN: config.devSubdomain,
+        VPC_ID: vpc.vpcId,
+        AWS_ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
+        COMPUTE_MODE: 'ec2',
+        STORAGE_TYPE: 'ec2',
+        NEXT_PUBLIC_STORAGE_TYPE: 'ec2',
+        INSTANCE_TABLE: 'cc-user-instances',
+        LAUNCH_TEMPLATE: 'cc-on-bedrock-devenv',
+        PRIVATE_SUBNET_IDS: cdk.Fn.join(',', vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds),
+        SG_DEVENV_OPEN: props.sgOpen.securityGroupId,
+        SG_DEVENV_RESTRICTED: props.sgRestricted.securityGroupId,
+        SG_DEVENV_LOCKED: props.sgLocked.securityGroupId,
+        S3_SYNC_BUCKET: `${config.projectPrefix}-user-data-${cdk.Aws.ACCOUNT_ID}`,
+        EFS_FILE_SYSTEM_ID: props.efsFileSystemId,
+        ROUTING_TABLE: 'cc-routing-table',
+        DLP_DOMAIN_LIST_TABLE: 'cc-dlp-domain-lists',
+        DNS_FIREWALL_RULE_GROUP_ID: props.dnsFirewallRuleGroupId ?? '',
+        ECS_INFRASTRUCTURE_ROLE_ARN: props.ecsInfrastructureRoleArn ?? '',
+        KMS_KEY_ARN: encryptionKey.keyArn,
+      },
+      secrets: {
+        NEXTAUTH_SECRET: ecs.Secret.fromSecretsManager(nextAuthSecret),
+        COGNITO_CLIENT_ID: ecs.Secret.fromSsmParameter(
+          ssm.StringParameter.fromStringParameterName(this, 'CognitoClientId', '/cc-on-bedrock/cognito/client-id'),
+        ),
+        COGNITO_CLIENT_SECRET: ecs.Secret.fromSsmParameter(
+          ssm.StringParameter.fromSecureStringParameterAttributes(this, 'CognitoClientSecret', {
+            parameterName: '/cc-on-bedrock/cognito/client-secret',
+          }),
+        ),
+      },
+      portMappings: [{ containerPort: 3000 }],
+      healthCheck: {
+        command: ['CMD-SHELL', 'node -e "fetch(\'http://localhost:3000/api/health\').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+        startPeriod: cdk.Duration.seconds(30),
+        retries: 3,
+      },
+    });
+
+    // ─── ECS Service ───
+    const service = new ecs.Ec2Service(this, 'DashboardSvc', {
+      cluster,
+      taskDefinition: taskDef,
+      desiredCount: 1,
+      minHealthyPercent: 0,
+      maxHealthyPercent: 200,
+      capacityProviderStrategies: [{ capacityProvider: 'cc-cp-devenv', weight: 1 }],
+      securityGroups: [taskSg],
+      enableExecuteCommand: true,
+    });
+
+    // ─── ALB ───
     const alb = new elbv2.ApplicationLoadBalancer(this, 'DashboardAlb', {
       vpc,
       internetFacing: true,
@@ -95,138 +345,38 @@ export class DashboardStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // EC2 ASG with Launch Template (Launch Configuration not available in this account)
-    const dashboardLaunchTemplate = new ec2.LaunchTemplate(this, 'DashboardLaunchTemplate', {
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.XLARGE),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-      role: dashboardEc2Role,
-      securityGroup: ec2Sg,
-      blockDevices: [{
-        deviceName: '/dev/xvda',
-        volume: ec2.BlockDeviceVolume.ebs(30, {
-          volumeType: ec2.EbsDeviceVolumeType.GP3,
-          encrypted: true,
-        }),
-      }],
-      userData: ec2.UserData.custom([
-        '#!/bin/bash',
-        'set -euo pipefail',
-        '',
-        '# Install Node.js 20 (direct binary)',
-        'ARCH=$(uname -m)',
-        'if [ "$ARCH" = "aarch64" ]; then NODE_ARCH="arm64"; else NODE_ARCH="x64"; fi',
-        `curl -fsSL "https://nodejs.org/dist/${config.nodeVersion}/node-${config.nodeVersion}-linux-\${NODE_ARCH}.tar.gz" -o /tmp/node.tar.gz`,
-        'tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1',
-        'rm /tmp/node.tar.gz',
-        '',
-        '# Install PM2',
-        'npm install -g pm2',
-        '',
-        '# Deploy Next.js app from S3',
-        'mkdir -p /opt/dashboard',
-        `aws s3 cp s3://cc-on-bedrock-deploy-${cdk.Aws.ACCOUNT_ID}/dashboard/dashboard-app.tar.gz /tmp/dashboard-app.tar.gz --region ${cdk.Aws.REGION}`,
-        'tar xzf /tmp/dashboard-app.tar.gz -C /opt/dashboard',
-        'rm /tmp/dashboard-app.tar.gz',
-        '',
-        '# Fetch secrets from Secrets Manager at runtime (not baked into UserData)',
-        `NEXTAUTH_SECRET_VAL=$(aws secretsmanager get-secret-value --secret-id cc-on-bedrock/nextauth-secret --region ${cdk.Aws.REGION} --query SecretString --output text 2>/dev/null || openssl rand -hex 32)`,
-        '',
-        '# Environment config',
-        'cat > /opt/dashboard/.env << ENVEOF',
-        `NEXTAUTH_URL=https://${config.dashboardSubdomain}.${config.domainName}`,
-        'NEXTAUTH_SECRET=$NEXTAUTH_SECRET_VAL',
-        `COGNITO_CLIENT_ID=${userPoolClient.userPoolClientId}`,
-        `COGNITO_ISSUER=https://cognito-idp.${cdk.Aws.REGION}.amazonaws.com/${userPool.userPoolId}`,
-        `AWS_REGION=${cdk.Aws.REGION}`,
-        `ECS_CLUSTER_NAME=${config.ecsClusterName}`,
-        `COGNITO_USER_POOL_ID=${userPool.userPoolId}`,
-        `DOMAIN_NAME=${config.domainName}`,
-        `DEV_SUBDOMAIN=${config.devSubdomain}`,
-        'PORT=3000',
-        'HOSTNAME=0.0.0.0',
-        `VPC_ID=${vpc.vpcId}`,
-        `AWS_ACCOUNT_ID=${cdk.Aws.ACCOUNT_ID}`,
-        `CLOUDFRONT_SECRET=${cloudfrontSecret.secretValue.unsafeUnwrap()}`,
-        'ROUTING_TABLE_NAME=cc-routing-table',
-        'ENVEOF',
-        'chmod 600 /opt/dashboard/.env',
-        '',
-        '# Start Next.js',
-        'cd /opt/dashboard',
-        'pm2 start server.js --name dashboard --env production',
-        'pm2 startup',
-        'pm2 save',
-      ].join('\n')),
-    });
+    const listener = dashboardCertificateArn
+      ? alb.addListener('HttpsListener', {
+          port: 443,
+          protocol: elbv2.ApplicationProtocol.HTTPS,
+          certificates: [elbv2.ListenerCertificate.fromArn(dashboardCertificateArn)],
+        })
+      : alb.addListener('HttpListener', {
+          port: 80,
+          protocol: elbv2.ApplicationProtocol.HTTP,
+        });
 
-    const asg = new autoscaling.AutoScalingGroup(this, 'DashboardAsg', {
-      vpc,
-      launchTemplate: dashboardLaunchTemplate,
-      minCapacity: 1,
-      maxCapacity: 2,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-    });
-
-    // ALB Listener + Target Group
-    const targetGroup = new elbv2.ApplicationTargetGroup(this, 'DashboardTg', {
-      vpc,
+    listener.addTargets('DashboardTarget', {
       port: 3000,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      targets: [asg],
+      targets: [service.loadBalancerTarget({
+        containerName: 'dashboard',
+        containerPort: 3000,
+      })],
       healthCheck: {
         path: '/api/health',
         interval: cdk.Duration.seconds(30),
       },
     });
 
-    if (dashboardCertificateArn) {
-      const httpsListener = alb.addListener('HttpsListener', {
-        port: 443,
-        protocol: elbv2.ApplicationProtocol.HTTPS,
-        certificates: [elbv2.ListenerCertificate.fromArn(dashboardCertificateArn)],
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-      // Only allow traffic with valid X-Custom-Secret header from CloudFront
-      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
-        listener: httpsListener,
-        priority: 1,
-        conditions: [
-          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
-        ],
-        targetGroups: [targetGroup],
-      });
-    } else {
-      const httpListener = alb.addListener('HttpListener', {
-        port: 80,
-        protocol: elbv2.ApplicationProtocol.HTTP,
-        defaultAction: elbv2.ListenerAction.fixedResponse(403, {
-          contentType: 'text/plain',
-          messageBody: 'Forbidden',
-        }),
-      });
-      new elbv2.ApplicationListenerRule(this, 'DashboardSecretRule', {
-        listener: httpListener,
-        priority: 1,
-        conditions: [
-          elbv2.ListenerCondition.httpHeader('X-Custom-Secret', [cloudfrontSecret.secretValue.unsafeUnwrap()]),
-        ],
-        targetGroups: [targetGroup],
-      });
-    }
-
-    // CloudFront Distribution
+    // ─── CloudFront Distribution ───
     const distribution = new cloudfront.Distribution(this, 'DashboardCf', {
+      webAclId: webAclArn,
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(alb, {
           protocolPolicy: dashboardCertificateArn
             ? cloudfront.OriginProtocolPolicy.HTTPS_ONLY
             : cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          customHeaders: {
-            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
-          },
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
@@ -234,6 +384,10 @@ export class DashboardStack extends cdk.Stack {
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       },
       comment: 'CC-on-Bedrock Dashboard',
+      ...(cloudfrontCertificateArn ? {
+        domainNames: [`${config.dashboardSubdomain}.${config.domainName}`],
+        certificate: acm.Certificate.fromCertificateArn(this, 'CfCert', cloudfrontCertificateArn),
+      } : {}),
     });
 
     // Route 53 Record
@@ -243,7 +397,7 @@ export class DashboardStack extends cdk.Stack {
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
     });
 
-    // Outputs
+    // ─── Outputs ───
     new cdk.CfnOutput(this, 'DashboardUrl', {
       value: `https://${config.dashboardSubdomain}.${config.domainName}`,
       exportName: 'cc-dashboard-url',
@@ -251,6 +405,9 @@ export class DashboardStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CloudFrontDomain', {
       value: distribution.distributionDomainName,
       exportName: 'cc-dashboard-cf-domain',
+    });
+    new cdk.CfnOutput(this, 'DashboardServiceName', {
+      value: service.serviceName,
     });
   }
 }

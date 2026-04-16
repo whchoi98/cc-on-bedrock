@@ -18,3 +18,5 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 5 active stacks.
 - IAM Role은 사용하는 스택에서 생성 (cross-stack cyclic ref 방지)
 - grantRead/grantPull 대신 broad ARN 패턴 사용
 - CDK context로 파라미터 오버라이드: `cdk deploy -c vpcCidr=10.1.0.0/16`
+- EC2-per-user DevEnv: Stack 07에서 Launch Template + per-user IAM 관리 (ECS devenv 제거됨)
+- Stack 04는 ECS Cluster + Nginx 서비스만 유지 (Dashboard + 리버스 프록시)

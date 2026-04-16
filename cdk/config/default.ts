@@ -14,6 +14,7 @@ export interface CcOnBedrockConfig {
 
   // Domain
   domainName: string;
+  hostedZoneId?: string;
   devSubdomain: string;
   dashboardSubdomain: string;
   cognitoDomainPrefix: string;
@@ -25,15 +26,18 @@ export interface CcOnBedrockConfig {
   // Compute
   ecsHostInstanceType: string;
   ecsClusterName: string;
-  dashboardInstanceType: string;
   nodeVersion: string;
 
   // Budget
   dailyBudgetUsd: number;
 
+  // DevEnv instance type (EC2-per-user)
+  devenvInstanceType: string;
+
   // CloudFront Prefix List (region-specific)
   cloudfrontPrefixListId: string;
 }
+
 
 // Region-specific CloudFront Managed Prefix List IDs
 // https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LocationsOfEdgeServers.html
@@ -56,16 +60,17 @@ export const defaultConfig: CcOnBedrockConfig = {
   privateSubnetCidrC: '10.100.32.0/20',
   isolatedSubnetCidrA: '10.100.100.0/23',
   isolatedSubnetCidrC: '10.100.102.0/23',
-  domainName: 'whchoi.net',
+  domainName: 'atomai.click',
+  hostedZoneId: '',  // Set via cdk.context.json or -c hostedZoneId=xxx
   devSubdomain: 'dev',
   dashboardSubdomain: 'cconbedrock-dashboard',
-  cognitoDomainPrefix: 'cc-on-bedrock',
+  cognitoDomainPrefix: 'cc-on-bedrock-ent',
   opusModelId: 'global.anthropic.claude-opus-4-6-v1[1m]',
   sonnetModelId: 'global.anthropic.claude-sonnet-4-6[1m]',
-  ecsHostInstanceType: 'm7g.4xlarge',
+  ecsHostInstanceType: 't4g.xlarge',  // Dashboard only in EC2 mode; use m7g.4xlarge for ECS mode
   ecsClusterName: 'cc-on-bedrock-devenv',
-  dashboardInstanceType: 't4g.xlarge',
   nodeVersion: 'v20.18.3',
   dailyBudgetUsd: 50,
+  devenvInstanceType: 't4g.large',
   cloudfrontPrefixListId: 'pl-22a6434b',  // ap-northeast-2 default
 };
