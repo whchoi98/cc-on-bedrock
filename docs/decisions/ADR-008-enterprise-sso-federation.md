@@ -285,7 +285,9 @@ const oktaOidc = new cognito.UserPoolIdentityProviderOidc(this, 'OktaOIDC', {
   userPool: this.userPool,
   name: 'Okta',
   clientId: config.federation!.oidcProviders![0].clientId,
-  clientSecret: config.federation!.oidcProviders![0].clientSecret,
+  clientSecret: cdk.SecretValue.secretsManager(
+    config.federation!.oidcProviders![0].clientSecretArn
+  ).unsafeUnwrap(),
   issuerUrl: config.federation!.oidcProviders![0].issuerUrl,
   // e.g., 'https://your-org.okta.com/oauth2/default'
   scopes: ['openid', 'email', 'profile'],
@@ -397,6 +399,14 @@ const facebook = new cognito.UserPoolIdentityProviderFacebook(this, 'Facebook', 
 Federated 사용자 자동 확인 + 선택적 도메인 allowlist 검증.
 
 ```javascript
+const {
+  CognitoIdentityProviderClient,
+  ListUsersCommand,
+  AdminLinkProviderForUserCommand,
+} = require('@aws-sdk/client-cognito-identity-provider');
+
+const client = new CognitoIdentityProviderClient({});
+
 exports.handler = async (event) => {
   // Federated 사용자만 처리 (네이티브 Cognito 사용자는 admin이 생성)
   if (event.triggerSource === 'PreSignUp_ExternalProvider') {
@@ -414,10 +424,41 @@ exports.handler = async (event) => {
         throw new Error(`Email domain ${emailDomain} is not allowed`);
       }
     }
+
+    // 동일 email 네이티브 사용자 존재 시 계정 연결 (LINK_EXISTING_USERS=true일 때)
+    if (process.env.LINK_EXISTING_USERS === 'true') {
+      const email = event.request.userAttributes.email;
+      const existing = await client.send(new ListUsersCommand({
+        UserPoolId: event.userPoolId,
+        Filter: `email = "${email}"`,
+        Limit: 1,
+      }));
+      if (existing.Users?.length > 0) {
+        const nativeUser = existing.Users[0];
+        // federated identity를 기존 네이티브 사용자에 연결
+        const [providerName, providerUserId] = event.userName.split('_');
+        await client.send(new AdminLinkProviderForUserCommand({
+          UserPoolId: event.userPoolId,
+          DestinationUser: {
+            ProviderName: 'Cognito',
+            ProviderAttributeValue: nativeUser.Username,
+          },
+          SourceUser: {
+            ProviderName: providerName,          // e.g., 'Google', 'AzureAD'
+            ProviderAttributeName: 'Cognito_Subject',
+            ProviderAttributeValue: providerUserId,
+          },
+        }));
+      }
+    }
   }
   return event;
 };
 ```
+
+**User Linking 동작:**
+- `LINK_EXISTING_USERS=true`: 동일 email 네이티브 사용자 발견 시 `AdminLinkProviderForUser`로 연결. 연결 후 federated 로그인 시 네이티브 사용자의 그룹/속성을 그대로 사용.
+- `LINK_EXISTING_USERS` 미설정 (기본): Cognito가 별도 shadow 사용자를 생성. 동일 email이지만 독립 계정.
 
 ### 2. PostAuthentication Lambda (`cognito-post-auth/index.js`)
 
@@ -537,7 +578,7 @@ export interface CcOnBedrockConfig {
     oidcProviders?: Array<{
       name: string;              // e.g., 'Okta', 'KeyCloak'
       clientId: string;
-      clientSecret: string;      // Secrets Manager ARN 권장
+      clientSecretArn: string;   // Secrets Manager ARN (평문 저장 금지)
       issuerUrl: string;         // e.g., 'https://org.okta.com/oauth2/default'
       scopes?: string[];
       identifiers?: string[];
@@ -556,8 +597,14 @@ export interface CcOnBedrockConfig {
 
 1. IdP 리소스 생성 (config.federation 기반 조건부)
 2. Lambda 트리거 3개 생성 + IAM 권한
-3. UserPoolClient에 `supportedIdentityProviders` 추가
-4. Client → Provider dependency 설정
+3. **PreTokenGeneration 트리거 연결 시 `lambdaVersion: cognito.LambdaVersion.V2_0` 필수** — 미지정 시 V1 형식으로 호출되어 `groupOverrideDetails`가 무시됨
+4. UserPoolClient에 `supportedIdentityProviders` 추가
+5. Client → Provider dependency 설정
+
+```typescript
+// PreTokenGeneration V2 트리거 연결 예시
+this.userPool.addTrigger(cognito.UserPoolOperation.PRE_TOKEN_GENERATION_CONFIG, preTokenGenFn, cognito.LambdaVersion.V2_0);
+```
 
 ### Login Page 변경 (`shared/nextjs-app/src/app/login/page.tsx`)
 
@@ -588,7 +635,7 @@ export interface CcOnBedrockConfig {
 |----------|------|------|
 | User Pool당 IdP 최대 **25개** | 대부분 충분 (기업당 1-2개 IdP) | 초과 시 별도 User Pool 분리 |
 | Lambda 트리거 latency **+50-200ms** | 모든 로그인에 영향 | Provisioned Concurrency, 네이티브 사용자 early-return |
-| Federated user **email 충돌** | 동일 email로 네이티브/federated 사용자 공존 시 | PreSignUp에서 user linking 또는 충돌 차단 |
+| Federated user **email 충돌** | 동일 email로 네이티브/federated 사용자 공존 시 (Cognito 기본 동작은 별도 사용자 생성) | PreSignUp에서 `AdminLinkProviderForUser`로 계정 연결, 또는 기존 email 발견 시 에러로 충돌 차단 |
 | Social IdP **department claim 없음** | 부서 기반 예산/접근제어 불가 | PostAuth Lambda에서 기본 부서 설정, admin 수동 할당 |
 | Hosted UI **커스터마이징 제한** | 브랜드 일관성 이슈 | Custom domain + CSS 커스터마이징, 또는 직접 IdP redirect |
 | `custom:subdomain` **자동 할당 불가** | Federated 사용자 첫 로그인 시 개발환경 즉시 사용 불가 | Controlled JIT — admin 승인 워크플로우 |

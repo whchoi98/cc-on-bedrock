@@ -54,7 +54,7 @@ def handler(event: dict, context: Any) -> dict:
         elif action == "schedule_shutdown":
             return schedule_shutdown()
         elif action == "check_hibernate_expiry":
-            return check_hibernate_expiry()
+            return check_hibernate_expiry(context)
         else:
             return {"statusCode": 400, "body": f"Unknown action: {action}"}
     except Exception as e:
@@ -305,11 +305,12 @@ def stop_devenv_instance(instance_id: str, subdomain: str):
         logger.warning(f"DynamoDB update failed for {subdomain}: {e}")
 
 
-def check_hibernate_expiry() -> dict:
+def check_hibernate_expiry(context=None) -> dict:
     """Rotate instances hibernated > HIBERNATE_MAX_DAYS to avoid AWS 60-day limit.
 
     Scans DynamoDB for status=hibernated with hibernatedAt older than HIBERNATE_MAX_DAYS.
     For each: Start → wait for running → Re-Hibernate → update hibernatedAt.
+    Processes max 2 instances per invocation to stay within Lambda timeout.
     """
     if not HIBERNATE_ENABLED:
         return {"statusCode": 200, "body": {"message": "Hibernate disabled"}}
@@ -317,25 +318,51 @@ def check_hibernate_expiry() -> dict:
     cutoff = (datetime.utcnow() - timedelta(days=HIBERNATE_MAX_DAYS)).isoformat()
     rotated = []
     errors = []
+    max_per_invocation = 2  # Each rotation takes ~2min; stay within 5min timeout
 
-    # Scan for hibernated instances past expiry
+    # Paginated scan for hibernated instances past expiry
+    items = []
+    scan_kwargs = {
+        "FilterExpression": "#st = :status AND hibernatedAt < :cutoff",
+        "ExpressionAttributeNames": {"#st": "status"},
+        "ExpressionAttributeValues": {":status": "hibernated", ":cutoff": cutoff},
+    }
     try:
-        resp = table.scan(
-            FilterExpression="#st = :status AND hibernatedAt < :cutoff",
-            ExpressionAttributeNames={"#st": "status"},
-            ExpressionAttributeValues={":status": "hibernated", ":cutoff": cutoff},
-        )
+        while True:
+            resp = table.scan(**scan_kwargs)
+            items.extend(resp.get("Items", []))
+            if "LastEvaluatedKey" not in resp:
+                break
+            scan_kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
     except Exception as e:
         logger.error(f"DynamoDB scan failed: {e}")
         return {"statusCode": 500, "body": str(e)}
 
-    for item in resp.get("Items", []):
+    for item in items[:max_per_invocation]:
         subdomain = item["user_id"]
         instance_id = item.get("instanceId", "")
         if not instance_id:
             continue
 
+        # Check remaining Lambda time before starting a ~2min rotation
+        if context and hasattr(context, "get_remaining_time_in_millis"):
+            remaining_ms = context.get_remaining_time_in_millis()
+            if remaining_ms < 150_000:  # Need at least 2.5min
+                logger.warning(f"Skipping {instance_id}: only {remaining_ms}ms remaining")
+                break
+
         try:
+            # Mark transitional state so crash doesn't leave ghost
+            table.update_item(
+                Key={"user_id": subdomain},
+                UpdateExpression="SET #st = :rotating, updatedAt = :ts",
+                ExpressionAttributeNames={"#st": "status"},
+                ExpressionAttributeValues={
+                    ":rotating": "rotating",
+                    ":ts": datetime.utcnow().isoformat(),
+                },
+            )
+
             # Start instance (resume from hibernate)
             logger.info(f"Rotating hibernated instance {instance_id} ({subdomain})")
             ec2.start_instances(InstanceIds=[instance_id])
@@ -347,11 +374,13 @@ def check_hibernate_expiry() -> dict:
             # Re-hibernate
             ec2.stop_instances(InstanceIds=[instance_id], Hibernate=True)
 
-            # Update hibernatedAt
+            # Update hibernatedAt + restore status
             table.update_item(
                 Key={"user_id": subdomain},
-                UpdateExpression="SET hibernatedAt = :hat, updatedAt = :ts",
+                UpdateExpression="SET #st = :status, hibernatedAt = :hat, updatedAt = :ts",
+                ExpressionAttributeNames={"#st": "status"},
                 ExpressionAttributeValues={
+                    ":status": "hibernated",
                     ":hat": datetime.utcnow().isoformat(),
                     ":ts": datetime.utcnow().isoformat(),
                 },
@@ -359,9 +388,23 @@ def check_hibernate_expiry() -> dict:
             rotated.append({"instanceId": instance_id, "subdomain": subdomain})
         except Exception as e:
             logger.error(f"Rotation failed for {instance_id} ({subdomain}): {e}")
+            # Revert to hibernated on failure (instance may still be running — next idle-check handles it)
+            try:
+                table.update_item(
+                    Key={"user_id": subdomain},
+                    UpdateExpression="SET #st = :status, updatedAt = :ts",
+                    ExpressionAttributeNames={"#st": "status"},
+                    ExpressionAttributeValues={
+                        ":status": "hibernated",
+                        ":ts": datetime.utcnow().isoformat(),
+                    },
+                )
+            except Exception:
+                pass
             errors.append({"instanceId": instance_id, "subdomain": subdomain, "error": str(e)})
 
-    result = {"rotated": rotated, "errors": errors}
+    skipped = len(items) - max_per_invocation if len(items) > max_per_invocation else 0
+    result = {"rotated": rotated, "errors": errors, "skipped": skipped, "total": len(items)}
     logger.info(f"Hibernate rotation: {json.dumps(result)}")
     return {"statusCode": 200, "body": result}
 

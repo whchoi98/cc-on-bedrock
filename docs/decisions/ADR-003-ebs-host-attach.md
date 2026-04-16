@@ -1,7 +1,7 @@
 # ADR-003: ECS Managed EBS에서 Host Attach 방식으로 전환
 
 ## Status
-Proposed (2026-04-01)
+Superseded by [ADR-004](ADR-004-ec2-per-user-devenv.md) (2026-04-03)
 
 ## Context
 현재 ECS managed EBS volume (`configuredAtLaunch: true`)은 매 RunTask마다 새 볼륨을 생성한다.
@@ -36,3 +36,20 @@ Phase 2에서 Lambda가 EC2 호스트에 기존 EBS를 직접 attach → host mo
 1. **Snapshot 기반만 유지**: orphan 정리 + 경고 추가. 간단하지만 시작 시간 개선 없음
 2. **Docker Volume Plugin (rexray)**: deprecated, 유지보수 불가
 3. **EFS 전환**: 공유 스토리지로 전환하면 볼륨 관리 불필요. 하지만 EBS 대비 IOPS 성능 열세
+
+## Implementation Outcome
+
+ADR-004 (EC2-per-user, 2026-04-03)가 ECS devenv 아키텍처를 폐기하면서 본 ADR이 해결하려던 문제 자체가 제거됨.
+
+- EC2-per-user에서는 EBS root volume이 인스턴스에 영구 귀속 → attach/detach 불필요
+- EC2 Stop/Start가 EBS를 자동 보존 → snapshot/restore 사이클 불필요
+- `configuredAtLaunch` 패턴 완전 제거 (ECS devenv task definition 삭제)
+
+### Snapshot 잔존 용도
+`switchOs()` (Ubuntu ↔ AL2023 전환) 시에만 EBS snapshot을 생성하여 복구 지점 보존.
+이는 ADR-003의 주기적 lifecycle 관리가 아닌, 파괴적 작업의 안전장치.
+
+### Dead code 잔존
+- `cdk/lib/lambda/ebs-lifecycle.py` — CDK에서 미참조 (03-usage-tracking-stack.ts line 206에서 REMOVED 주석)
+- `cdk/lib/lambda/warm-stop.py` — 동일하게 미참조
+- `cdk/lib/02-security-stack.ts` — `cc-user-volumes` IAM ARN 참조 잔존 (stale)

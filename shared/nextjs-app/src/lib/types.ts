@@ -249,7 +249,7 @@ export interface HealthStatus {
 
 export type ProvisioningStepName =
   | "iam_role"
-  | "efs_access_point"
+  | "storage_prepare"
   | "task_definition"
   | "password_store"
   | "container_start"
@@ -267,7 +267,7 @@ export interface ProvisioningEvent {
 
 export const PROVISIONING_STEPS: { step: number; name: ProvisioningStepName; label: string }[] = [
   { step: 1, name: "iam_role", label: "Setting up permissions" },
-  { step: 2, name: "efs_access_point", label: "Preparing storage" },
+  { step: 2, name: "storage_prepare", label: "Preparing storage" },
   { step: 3, name: "task_definition", label: "Configuring environment" },
   { step: 4, name: "password_store", label: "Securing access" },
   { step: 5, name: "container_start", label: "Starting container" },

@@ -1,6 +1,6 @@
 # ADR-006: 부서 예산 관리 — EventBridge + Lambda 동적 IAM 집행
 
-## Status: Proposed
+## Status: Accepted
 
 ## Date: 2026-04-09
 
@@ -106,6 +106,21 @@ EventBridge (5분 주기) → budget-check Lambda
 - **Pros**: AWS 네이티브, 설정 간단
 - **Cons**: Billing 데이터 최대 24시간 지연, per-user 세분화 불가, 부서 단위 불가
 - **탈락 이유**: 지연이 5분 → 24시간으로 악화, 세분화 수준 불충분
+
+## Implementation
+
+전 항목 구현 완료 (2026-04-16 기준).
+
+| 구성요소 | 구현 위치 |
+|---------|---------|
+| `cc-department-budgets` 테이블 | `cdk/lib/03-usage-tracking-stack.ts` |
+| `cc-user-budgets` 테이블 | 동일 파일 |
+| Budget Lambda (508줄) | `cdk/lib/lambda/budget-check.py` — 개인 일일 + 부서 월간 검사 |
+| EventBridge 5분 스케줄 | `03-usage-tracking-stack.ts` — `cc-on-bedrock-budget-check-schedule` |
+| IAM Deny 부착/해제 | `budget-check.py` — `BudgetExceededDeny` (개인), `DeptBudgetExceededDeny` (부서) |
+| Admin API (GET/PUT) | `src/app/api/admin/budgets/route.ts` — 부서/개인 예산 설정 |
+| Dept Dashboard (515줄) | `src/app/dept/dept-dashboard.tsx` — 예산 게이지, 월간 트렌드, 멤버 테이블 |
+| 80% 경고 / 100% 차단 | `budget-check.py` — SNS 알림 + Cognito budget_exceeded 플래그 |
 
 ## References
 

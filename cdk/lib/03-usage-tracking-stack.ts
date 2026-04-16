@@ -229,8 +229,15 @@ export class UsageTrackingStack extends cdk.Stack {
 
     // EC2 idle-stop permissions (StartInstances needed for ADR-010 hibernate rotation)
     ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['ec2:DescribeInstances', 'ec2:StopInstances', 'ec2:StartInstances'],
+      actions: ['ec2:DescribeInstances'],
       resources: ['*'],
+    }));
+    ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ec2:StopInstances', 'ec2:StartInstances'],
+      resources: [`arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/*`],
+      conditions: {
+        StringEquals: { 'ec2:ResourceTag/managed_by': 'cc-on-bedrock' },
+      },
     }));
     ec2IdleStopLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudwatch:GetMetricStatistics', 'cloudwatch:GetMetricData'],
@@ -351,12 +358,12 @@ export class UsageTrackingStack extends cdk.Stack {
               logGroupName: bedrockLogGroup.logGroupName,
               roleArn: bedrockLoggingRole.roleArn,
             },
-            textDataDeliveryEnabled: true,
+            textDataDeliveryEnabled: false,
             imageDataDeliveryEnabled: false,
             embeddingDataDeliveryEnabled: false,
           },
         },
-        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging-v2'),
+        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging-v3'),
       },
       onUpdate: {
         service: 'Bedrock',
@@ -367,12 +374,12 @@ export class UsageTrackingStack extends cdk.Stack {
               logGroupName: bedrockLogGroup.logGroupName,
               roleArn: bedrockLoggingRole.roleArn,
             },
-            textDataDeliveryEnabled: true,
+            textDataDeliveryEnabled: false,
             imageDataDeliveryEnabled: false,
             embeddingDataDeliveryEnabled: false,
           },
         },
-        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging-v2'),
+        physicalResourceId: cr.PhysicalResourceId.of('bedrock-invocation-logging-v3'),
       },
       // No onDelete — keep logging enabled even if stack is deleted/updated
       // Previous onDelete disabled logging during CDK rollbacks

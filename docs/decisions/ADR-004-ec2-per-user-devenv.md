@@ -4,6 +4,10 @@
 
 ## Date: 2026-04-03
 
+## Supersedes
+- [ADR-001: EBS + S3 Storage Strategy](ADR-001-ebs-s3-storage-strategy.md) — EC2 root volume이 EBS 격리 + S3 sync를 대체
+- [ADR-003: EBS Host Attach](ADR-003-ebs-host-attach.md) — EC2-per-user로 ECS host attach 문제 자체 제거
+
 ## Context
 
 CC-on-Bedrock의 개발환경(code-server)이 ECS Task로 실행되고 있으나, code-server는 본질적으로 stateful 워크로드(파일, 패키지, 시스템 설정 보존 필요)이다. ECS는 stateless 워크로드에 최적화되어 있어 다음 11개 문제가 발생:
@@ -66,3 +70,24 @@ DevEnv을 **EC2-per-user** 아키텍처로 전환한다.
 | 코드 복잡도 | ~2,200줄 | ~900줄 (55% 감소) |
 | 비용 (100명) | ~$7,200/월 | ~$6,200/월 |
 | EBS 관리 | snapshot/restore 매번 | Stop/Start → 자동 보존 |
+
+## Implementation Status
+
+전 항목 구현 완료 (2026-04-16 기준).
+
+| 구성요소 | 구현 위치 |
+|---------|---------|
+| EC2 인스턴스 관리 (start/stop/terminate) | `shared/nextjs-app/src/lib/ec2-clients.ts` |
+| AMI 빌드 파이프라인 | `scripts/build-ami.sh` (SSM 기반, Ubuntu 24.04 ARM64) |
+| Launch Template (gp3 30GB, encrypted, hibernation) | `cdk/lib/07-ec2-devenv-stack.ts` |
+| DynamoDB `cc-user-instances` | 동일 파일 — PK: subdomain → instanceId, status, tier |
+| Idle detection + auto-stop | `cdk/lib/lambda/ec2-idle-stop.py` + EventBridge 15분 주기 |
+| Nginx routing 연동 | `cc-routing-table` DynamoDB에 instance private IP 등록 |
+| EC2 Hibernation (ADR-010) | Feature flag `HIBERNATE_ENABLED`, ~5초 resume |
+| Per-user IAM Instance Profile | `ec2-clients.ts` — Bedrock 접근 + DLP 정책 |
+| Per-user Security Group | `ec2-clients.ts` — open/restricted/locked 정책별 규칙 |
+
+### 제거된 ECS devenv 코드
+- `cdk/lib/lambda/ebs-lifecycle.py` — dead code (CDK 미참조)
+- `cdk/lib/lambda/warm-stop.py` — dead code (CDK 미참조)
+- ECS devenv task definition — Stack 04에서 Nginx/Dashboard만 잔존
