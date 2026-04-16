@@ -301,6 +301,7 @@ export class DashboardStack extends cdk.Stack {
         DNS_FIREWALL_RULE_GROUP_ID: props.dnsFirewallRuleGroupId ?? '',
         ECS_INFRASTRUCTURE_ROLE_ARN: props.ecsInfrastructureRoleArn ?? '',
         KMS_KEY_ARN: encryptionKey.keyArn,
+        HIBERNATE_ENABLED: 'true',  // ADR-010: EC2 Hibernation support
       },
       secrets: {
         NEXTAUTH_SECRET: ecs.Secret.fromSecretsManager(nextAuthSecret),

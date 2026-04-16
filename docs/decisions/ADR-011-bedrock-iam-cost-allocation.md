@@ -1,4 +1,4 @@
-# ADR-005: Bedrock IAM Cost Allocation Hybrid Integration
+# ADR-011: Bedrock IAM Cost Allocation Hybrid Integration
 
 ## Status
 Accepted (2026-04-10)
