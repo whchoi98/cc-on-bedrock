@@ -96,6 +96,8 @@ export async function getEc2Metrics(instanceId: string): Promise<InstanceMetrics
         ec2Query("disk", "CWAgent", "disk_used_percent", "Average", period, instanceId),
         ec2Query("memUsed", "CWAgent", "mem_used", "Average", period, instanceId),
         ec2Query("memTotal", "CWAgent", "mem_total", "Average", period, instanceId),
+        ec2Query("diskRead", "CWAgent", "diskio_read_bytes", "Sum", period, instanceId),
+        ec2Query("diskWrite", "CWAgent", "diskio_write_bytes", "Sum", period, instanceId),
       ],
     })
   );
@@ -133,8 +135,8 @@ export async function getEc2Metrics(instanceId: string): Promise<InstanceMetrics
     memoryTotalBytes: getLatest("memTotal"),
     networkRx: getLatest("netRx"),
     networkTx: getLatest("netTx"),
-    diskRead: 0,
-    diskWrite: 0,
+    diskRead: getLatest("diskRead"),
+    diskWrite: getLatest("diskWrite"),
     diskUsedPercent: getLatest("disk"),
     timeseries,
   };
