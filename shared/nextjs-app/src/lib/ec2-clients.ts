@@ -148,6 +148,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       // Sync code-server password from Secrets Manager (UserData only runs on first boot)
       await syncCodeserverPassword(existing.instanceId, input.subdomain);
 
+      // Update Claude CLI + start CWAgent (fire-and-forget)
+      postStartSetup(existing.instanceId);
+
       // Update routing table
       await registerRoute(input.subdomain, info.privateIp);
 
@@ -260,12 +263,22 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `CSCFG`,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
-      `# Start CloudWatch Agent for memory/disk metrics`,
-      `if [ -f /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json ]; then`,
-      `  amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
-      `else`,
-      `  systemctl start amazon-cloudwatch-agent 2>/dev/null || true`,
+      `# Install CloudWatch Agent for memory/disk metrics`,
+      `if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
+      `  if command -v dnf &>/dev/null; then`,
+      `    dnf install -y amazon-cloudwatch-agent 2>/dev/null || true`,
+      `  elif command -v apt-get &>/dev/null; then`,
+      `    wget -q https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/cwagent.deb && dpkg -i /tmp/cwagent.deb && rm -f /tmp/cwagent.deb`,
+      `  fi`,
       `fi`,
+      `# Configure CWAgent`,
+      `mkdir -p /opt/aws/amazon-cloudwatch-agent/etc`,
+      `cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCFG'`,
+      `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
+      `CWCFG`,
+      `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
+      `# Install Claude Code CLI (as coder user)`,
+      `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
     ].join("\n")).toString("base64"),
   }));
 
@@ -599,6 +612,21 @@ export async function restoreFromSnapshot(
       `CSCFG`,
       `chown -R coder:coder /home/coder/.config`,
       `systemctl restart code-server || systemctl start code-server`,
+      `# Install CloudWatch Agent for memory/disk metrics`,
+      `if ! command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
+      `  if command -v dnf &>/dev/null; then`,
+      `    dnf install -y amazon-cloudwatch-agent 2>/dev/null || true`,
+      `  elif command -v apt-get &>/dev/null; then`,
+      `    wget -q https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/cwagent.deb && dpkg -i /tmp/cwagent.deb && rm -f /tmp/cwagent.deb`,
+      `  fi`,
+      `fi`,
+      `mkdir -p /opt/aws/amazon-cloudwatch-agent/etc`,
+      `cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCFG'`,
+      `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
+      `CWCFG`,
+      `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
+      `# Install Claude Code CLI (as coder user)`,
+      `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
     ].join("\n")).toString("base64"),
   }));
 
@@ -1038,7 +1066,34 @@ async function syncCodeserverPassword(instanceId: string, subdomain: string): Pr
     console.log(`[EC2] Synced code-server password for ${subdomain} on ${instanceId}`);
   } catch (err) {
     console.warn(`[EC2] Password sync failed for ${subdomain}:`, err);
-    // Non-critical: code-server still works with old password
+  }
+}
+
+/**
+ * Post-start setup: update Claude Code CLI + start CWAgent.
+ * Runs on every instance start (not just first boot) via SSM Run Command.
+ * Fire-and-forget: non-blocking to avoid slowing instance start.
+ */
+async function postStartSetup(instanceId: string): Promise<void> {
+  try {
+    await ssmClient.send(new SendCommandCommand({
+      InstanceIds: [instanceId],
+      DocumentName: "AWS-RunShellScript",
+      Parameters: {
+        commands: [
+          `# Update Claude Code CLI to latest (as coder user)`,
+          `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1 || true`,
+          `# Start CWAgent for memory/disk metrics`,
+          `if command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
+          `  amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || amazon-cloudwatch-agent-ctl -a start 2>/dev/null || true`,
+          `fi`,
+        ],
+      },
+      TimeoutSeconds: 120,
+    }));
+    console.log(`[EC2] Post-start setup initiated for ${instanceId}`);
+  } catch (err) {
+    console.warn(`[EC2] Post-start setup failed for ${instanceId}:`, err);
   }
 }
 

@@ -321,9 +321,49 @@ export interface BedrockUsageTimeSeriesPoint {
 }
 
 /**
+ * Query DEPT# aggregate records for a date range.
+ * These are pre-aggregated by the Lambda (one row per dept per day).
+ */
+async function getDeptAggregates(startDate: string, endDate: string): Promise<{
+  inputTokens: number; outputTokens: number; totalTokens: number;
+  requests: number; estimatedCost: number; latencySumMs: number;
+}> {
+  const items: Record<string, AttributeValue>[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
+  do {
+    const result = await dynamodb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: "begins_with(PK, :deptPrefix) AND SK BETWEEN :start AND :end",
+      ExpressionAttributeValues: {
+        ":deptPrefix": { S: "DEPT#" },
+        ":start": { S: startDate },
+        ":end": { S: `${endDate}~` },
+      },
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+    pages++;
+  } while (lastKey && pages < MAX_PAGES);
+
+  let inputTokens = 0, outputTokens = 0, totalTokens = 0;
+  let requests = 0, estimatedCost = 0, latencySumMs = 0;
+  for (const item of items) {
+    const u = unmarshall(item);
+    inputTokens += u.inputTokens ?? 0;
+    outputTokens += u.outputTokens ?? 0;
+    totalTokens += u.totalTokens ?? 0;
+    requests += u.requests ?? 0;
+    estimatedCost += Number(u.estimatedCost ?? 0);
+    latencySumMs += Number(u.latencySumMs ?? 0);
+  }
+  return { inputTokens, outputTokens, totalTokens, requests, estimatedCost, latencySumMs };
+}
+
+/**
  * Get today's Bedrock usage from DynamoDB (cc-on-bedrock project only).
- * Unlike CloudWatch AWS/Bedrock metrics, this only includes invocations
- * made through cc-on-bedrock IAM roles (cc-on-bedrock-task-* prefix).
+ * Tries USER# records first; falls back to DEPT# aggregates if none found.
  */
 export async function getBedrockUsageSnapshot(): Promise<BedrockUsageSnapshot> {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -336,13 +376,23 @@ export async function getBedrockUsageSnapshot(): Promise<BedrockUsageSnapshot> {
   let cost = 0;
   let latencySum = 0;
 
-  for (const r of records) {
-    inputTokens += r.inputTokens;
-    outputTokens += r.outputTokens;
-    totalTokens += r.totalTokens;
-    requests += r.requests;
-    cost += r.estimatedCost;
-    latencySum += r.latencySumMs;
+  if (records.length > 0) {
+    for (const r of records) {
+      inputTokens += r.inputTokens;
+      outputTokens += r.outputTokens;
+      totalTokens += r.totalTokens;
+      requests += r.requests;
+      cost += r.estimatedCost;
+      latencySum += r.latencySumMs;
+    }
+  } else {
+    const dept = await getDeptAggregates(today, today);
+    inputTokens = dept.inputTokens;
+    outputTokens = dept.outputTokens;
+    totalTokens = dept.totalTokens;
+    requests = dept.requests;
+    cost = dept.estimatedCost;
+    latencySum = dept.latencySumMs;
   }
 
   // Hours elapsed since midnight UTC
@@ -366,6 +416,7 @@ export async function getBedrockUsageSnapshot(): Promise<BedrockUsageSnapshot> {
 
 /**
  * Get daily Bedrock usage time series from DynamoDB (cc-on-bedrock project only).
+ * Tries USER# records first; falls back to DEPT# aggregates if none found.
  */
 export async function getBedrockUsageTimeSeries(
   days: number = 7,
@@ -375,14 +426,53 @@ export async function getBedrockUsageTimeSeries(
 
   const daily = await getDailyUsage({ startDate, endDate });
 
-  return daily.map((d) => ({
-    date: d.date,
-    inputTokens: d.inputTokens,
-    outputTokens: d.outputTokens,
-    totalTokens: d.totalTokens,
-    invocations: d.requests,
-    estimatedCost: d.estimatedCost,
-  }));
+  if (daily.length > 0) {
+    return daily.map((d) => ({
+      date: d.date,
+      inputTokens: d.inputTokens,
+      outputTokens: d.outputTokens,
+      totalTokens: d.totalTokens,
+      invocations: d.requests,
+      estimatedCost: d.estimatedCost,
+    }));
+  }
+
+  // Fallback: use DEPT# aggregates (one record per dept per day)
+  const items: Record<string, AttributeValue>[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
+  do {
+    const result = await dynamodb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: "begins_with(PK, :deptPrefix) AND SK BETWEEN :start AND :end",
+      ExpressionAttributeValues: {
+        ":deptPrefix": { S: "DEPT#" },
+        ":start": { S: startDate },
+        ":end": { S: `${endDate}~` },
+      },
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+    pages++;
+  } while (lastKey && pages < MAX_PAGES);
+
+  const dateMap = new Map<string, BedrockUsageTimeSeriesPoint>();
+  for (const item of items) {
+    const u = unmarshall(item);
+    const date = u.SK as string;
+    const existing = dateMap.get(date) ?? {
+      date, inputTokens: 0, outputTokens: 0, totalTokens: 0, invocations: 0, estimatedCost: 0,
+    };
+    existing.inputTokens += u.inputTokens ?? 0;
+    existing.outputTokens += u.outputTokens ?? 0;
+    existing.totalTokens += u.totalTokens ?? 0;
+    existing.invocations += u.requests ?? 0;
+    existing.estimatedCost += Number(u.estimatedCost ?? 0);
+    dateMap.set(date, existing);
+  }
+
+  return Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // ─── Total Spend ───

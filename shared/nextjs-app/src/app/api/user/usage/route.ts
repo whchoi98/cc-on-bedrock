@@ -15,9 +15,14 @@ export async function GET(req: NextRequest) {
   const date = searchParams.get("date") ?? new Date().toISOString().split("T")[0];
 
   try {
-    // Get usage records for the current user and date
+    // DynamoDB PK is USER#{subdomain}, not email
+    const subdomain = session.user.subdomain;
+    if (!subdomain) {
+      return NextResponse.json({ success: true, data: { totalTokens: 0, dailyLimit: DEFAULT_DAILY_LIMIT, requests: 0, estimatedCost: 0, date } });
+    }
+
     const records = await getUsageRecords({
-      userId: session.user.email,
+      userId: subdomain,
       startDate: date,
       endDate: date,
     });
