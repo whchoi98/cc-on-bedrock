@@ -274,8 +274,8 @@ export class DashboardStack extends cdk.Stack {
 
     taskDef.addContainer('dashboard', {
       image: ecs.ContainerImage.fromEcrRepository(dashboardRepo, 'latest'),
-      cpu: 4096,
-      memoryLimitMiB: 15360,
+      cpu: 2048,
+      memoryLimitMiB: 7680,
       essential: true,
       logging: ecs.LogDrivers.awsLogs({ logGroup, streamPrefix: 'dashboard' }),
       environment: {
