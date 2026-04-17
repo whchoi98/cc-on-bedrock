@@ -4,10 +4,12 @@ import { authOptions } from "@/lib/auth";
 import {
   getEc2AggregateMetrics,
   getEc2TimeSeries,
-  getBedrockMetrics,
-  getBedrockMetricsTimeSeries,
 } from "@/lib/cloudwatch-client";
 import { listInstances } from "@/lib/ec2-clients";
+import {
+  getBedrockUsageSnapshot,
+  getBedrockUsageTimeSeries,
+} from "@/lib/usage-client";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -30,7 +32,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ success: true, data: metrics });
       }
       case "timeseries": {
-        const hours = parseInt(searchParams.get("hours") ?? "6", 10);
+        const hours = Math.min(Math.max(parseInt(searchParams.get("hours") ?? "6", 10), 1), 168);
         // Use the first running instance for timeseries, or return empty
         if (runningIds.length === 0) {
           return NextResponse.json({ success: true, data: { timestamps: [], cpu: [], memory: [], networkRx: [], networkTx: [] } });
@@ -59,12 +61,12 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ success: true, data: instanceData });
       }
       case "bedrock": {
-        const brMetrics = await getBedrockMetrics();
+        const brMetrics = await getBedrockUsageSnapshot();
         return NextResponse.json({ success: true, data: brMetrics });
       }
       case "bedrock_timeseries": {
-        const brHours = parseInt(searchParams.get("hours") ?? "6", 10);
-        const brTs = await getBedrockMetricsTimeSeries(brHours);
+        const brDays = Math.min(Math.max(parseInt(searchParams.get("days") ?? "7", 10), 1), 90);
+        const brTs = await getBedrockUsageTimeSeries(brDays);
         return NextResponse.json({ success: true, data: brTs });
       }
       default:

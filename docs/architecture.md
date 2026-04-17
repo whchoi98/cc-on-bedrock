@@ -106,7 +106,7 @@ graph TB
 
     %% Routing
     Nginx -->|Lookup| RoutingTable
-    NextJS -->|Register IP| RoutingTable
+    DashContainer -->|Register IP| RoutingTable
 
     %% Usage Tracking Flow
     EC2_Instances -.->|API Call| CT
@@ -438,11 +438,13 @@ graph LR
     L2 -->|"If over budget"| IAM["IAM Deny Policy<br/>on per-user role"]
     L2 -.->|"80% / 100%"| SNS["SNS Alert<br/>(dept-manager + admin)"]
 
-    Dashboard["Dashboard"] -->|"Query"| DDB
+    Dashboard["Dashboard<br/>Monitoring + Analytics"] -->|"Query<br/>(project-only usage)"| DDB
 
     style Bedrock fill:#ff9900,color:#fff
     style DDB fill:#4053d6,color:#fff
     style BudgetDB fill:#4053d6,color:#fff
 ```
+
+**Dashboard Metrics Source**: Monitoring page의 Bedrock 사용량 메트릭은 DynamoDB `cc-on-bedrock-usage` 테이블에서 조회. CloudWatch `AWS/Bedrock` namespace는 계정 전체 사용량이므로 사용하지 않음 — DynamoDB 파이프라인이 `cc-on-bedrock-task-*` IAM role prefix로 3중 필터링하여 프로젝트 전용 데이터만 기록.
 
 **CloudWatch Cost Optimization**: `textDataDeliveryEnabled: false` on Bedrock invocation logging — disables full request/response text delivery, keeping only metadata (model ID, token counts, latency). Reduces CloudWatch Logs cost by ~99% while preserving all data needed for usage tracking and budget enforcement.

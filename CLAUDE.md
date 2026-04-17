@@ -10,7 +10,8 @@ CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 3가지 IaC로 동일 인�
 - **Frontend:** Next.js 14+ (App Router), Tailwind CSS, Recharts
 - **Auth:** Amazon Cognito + NextAuth.js
 - **Backend Services:** DynamoDB (usage tracking), code-server, Claude Code CLI, Kiro CLI
-- **AWS Services:** ECS (EC2 Mode), ALB, CloudFront, DynamoDB, EventBridge, Lambda, EFS, Route 53, Secrets Manager, KMS
+- **Compute:** EC2 per-user DevEnv (ARM64, ADR-004), ECS (Dashboard Ec2Service + Nginx Fargate)
+- **AWS Services:** EC2, ECS, ALB, CloudFront, DynamoDB, EventBridge, Lambda, Route 53, Secrets Manager, KMS
 - **AI Models:** Bedrock Opus 4.6 (`global.anthropic.claude-opus-4-6-v1[1m]`), Sonnet 4.6 (`global.anthropic.claude-sonnet-4-6[1m]`)
 - **Region:** ap-northeast-2 (Seoul)
 
@@ -37,7 +38,7 @@ tests/             - Container integration tests, E2E tests
 - **Secret**: Secrets Manager에 저장, CDK에서 `fromSecretNameV2` 또는 `fromSecretCompleteArn`으로 참조
 - **Cross-stack 참조 금지**: CloudFormation export 대신 SSM Parameter Store 또는 direct import 사용
 - **IAM role은 CDK에서 생성** — CLI로 수동 생성한 role은 CDK import(`fromRoleName`)하거나 CDK로 재생성
-- **Docker 이미지**: ECR에 push 후 task definition에서 참조. 이미지 빌드는 ARM64 ECS 인스턴스에서 수행
+- **Docker 이미지**: Dashboard → ECR push 후 ECS task definition 참조. DevEnv → AMI 기반 EC2 직접 실행
 - **환경변수 우선순위**: CDK config → SSM Parameter → Secrets Manager → 기본값
 
 ## Conventions
@@ -46,7 +47,7 @@ tests/             - Container integration tests, E2E tests
 - All subnet CIDRs are deploy-time input parameters
 - CloudFront -> ALB security: Prefix List + X-Custom-Secret header
 - DLP security policies: open/restricted/locked (per-user configurable)
-- ECS roles created in consuming stack (avoid CDK cross-stack cyclic refs)
+- IAM roles created in consuming stack (avoid CDK cross-stack cyclic refs)
 
 ## Key Commands
 ```bash
@@ -72,6 +73,7 @@ cd cloudformation && bash destroy.sh           # Destroy all stacks (reverse)
 # Next.js Dashboard
 cd shared/nextjs-app && npm install && npm run dev   # Dev server
 cd shared/nextjs-app && npx tsc --noEmit             # Type check
+cd shared/nextjs-app && npx vitest run               # Unit tests (vitest)
 
 # Tests
 bash tests/integration/test-e2e.sh             # Full E2E test
