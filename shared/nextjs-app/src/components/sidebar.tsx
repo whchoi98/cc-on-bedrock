@@ -4,175 +4,161 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useI18n } from "@/lib/i18n";
+import { motion } from "framer-motion";
+import { cn } from "@/lib/utils";
+import {
+  Home,
+  Terminal,
+  Building2,
+  Sparkles,
+  BarChart3,
+  Activity,
+  ShieldCheck,
+  Users2,
+  Server,
+  Coins,
+  Wallet,
+  ClipboardCheck,
+  BookOpen,
+  LogOut,
+  ChevronRight,
+  Globe
+} from "lucide-react";
 
 interface NavItem {
   href: string;
   labelKey: string;
-  icon: string;
+  icon: any;
   adminOnly?: boolean;
+  deptManagerOnly?: boolean;
+  showForAll?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { href: "/", labelKey: "nav.home", icon: "home" },
-  { href: "/ai", labelKey: "nav.ai", icon: "sparkle", adminOnly: true },
-  { href: "/analytics", labelKey: "nav.analytics", icon: "chart-bar" },
-  { href: "/monitoring", labelKey: "nav.monitoring", icon: "activity", adminOnly: true },
-  { href: "/security", labelKey: "nav.security", icon: "shield", adminOnly: true },
-  { href: "/admin", labelKey: "nav.users", icon: "users", adminOnly: true },
-  { href: "/admin/containers", labelKey: "nav.containers", icon: "server", adminOnly: true },
+  { href: "/", labelKey: "nav.home", icon: Home },
+  { href: "/user", labelKey: "nav.myEnv", icon: Terminal, showForAll: true },
+  { href: "/dept", labelKey: "nav.department", icon: Building2, deptManagerOnly: true },
+  { href: "/ai", labelKey: "nav.ai", icon: Sparkles },
+  { href: "/analytics", labelKey: "nav.analytics", icon: BarChart3 },
+  { href: "/monitoring", labelKey: "nav.monitoring", icon: Activity, adminOnly: true },
+  { href: "/security", labelKey: "nav.security", icon: ShieldCheck, adminOnly: true },
+  { href: "/admin", labelKey: "nav.users", icon: Users2, adminOnly: true },
+  { href: "/admin/instances", labelKey: "nav.containers", icon: Server, adminOnly: true },
+  { href: "/admin/tokens", labelKey: "nav.tokens", icon: Coins, adminOnly: true },
+  { href: "/admin/budgets", labelKey: "nav.budgets", icon: Wallet, adminOnly: true },
+  { href: "/admin/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, adminOnly: true },
+  { href: "/admin/dlp", labelKey: "nav.dlpManagement", icon: ShieldCheck, adminOnly: true },
+  { href: "/docs", labelKey: "nav.docs", icon: BookOpen, showForAll: true },
 ];
-
-function NavIcon({ icon }: { icon: string }) {
-  switch (icon) {
-    case "home":
-      return (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-        </svg>
-      );
-    case "sparkle":
-      return (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
-        </svg>
-      );
-    case "shield":
-      return (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-        </svg>
-      );
-    case "chart-bar":
-      return (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-        </svg>
-      );
-    case "activity":
-      return (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-      );
-    case "users":
-      return (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-        </svg>
-      );
-    case "server":
-      return (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-        </svg>
-      );
-    default:
-      return null;
-  }
-}
 
 export default function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const { locale, setLocale, t } = useI18n();
   const isAdmin = session?.user?.isAdmin ?? false;
+  const groups = session?.user?.groups ?? [];
+  const isDeptManager = groups.includes("dept-manager") || isAdmin;
 
-  const filteredItems = navItems.filter(
-    (item) => !item.adminOnly || isAdmin
-  );
+  const filteredItems = navItems.filter((item) => {
+    if (item.adminOnly && !isAdmin) return false;
+    if (item.deptManagerOnly && !isDeptManager) return false;
+    return true;
+  });
 
   return (
-    <aside className="flex flex-col w-60 min-h-screen bg-[#161b22] border-r border-gray-800">
-      {/* Logo + Language Toggle */}
-      <div className="px-5 pt-5 pb-3 border-b border-gray-800">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 text-white font-bold text-sm">
-            CC
+    <aside className="flex flex-col w-64 min-h-screen bg-[#0d1117] border-r border-white/5 relative z-50">
+      {/* Branding */}
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-8">
+          <div className="relative group">
+            <div className="absolute -inset-1 bg-gradient-to-r from-primary-600 to-blue-600 rounded-xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
+            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-[#161b22] border border-white/10 text-white font-black text-lg">
+              CC
+            </div>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-gray-100">CC-on-Bedrock</h1>
-            <p className="text-[10px] text-gray-500">Dashboard</p>
+            <h1 className="text-sm font-black text-white tracking-tight uppercase">CC-on-Bedrock</h1>
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Enterprise v2</p>
+            </div>
           </div>
         </div>
-        <div className="flex items-center bg-[#0d1117] rounded-lg border border-gray-800 p-0.5">
+
+        {/* Language Toggle */}
+        <div className="flex items-center bg-[#161b22] rounded-xl border border-white/5 p-1 mb-6">
           <button
             onClick={() => setLocale("ko")}
-            className={`flex-1 px-3 py-1 text-[10px] font-medium rounded-md transition-colors ${
-              locale === "ko"
-                ? "bg-blue-600 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
+            className={cn(
+              "flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-200",
+              locale === "ko" ? "bg-primary-600 text-white shadow-lg shadow-primary-900/20" : "text-gray-500 hover:text-gray-300"
+            )}
           >
-            한국어
+            <Globe className="w-3 h-3" />
+            한글
           </button>
           <button
             onClick={() => setLocale("en")}
-            className={`flex-1 px-3 py-1 text-[10px] font-medium rounded-md transition-colors ${
-              locale === "en"
-                ? "bg-blue-600 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
+            className={cn(
+              "flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-bold rounded-lg transition-all duration-200",
+              locale === "en" ? "bg-primary-600 text-white shadow-lg shadow-primary-900/20" : "text-gray-500 hover:text-gray-300"
+            )}
           >
-            English
+            <Globe className="w-3 h-3" />
+            ENG
           </button>
         </div>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-4 space-y-1 overflow-y-auto custom-scrollbar">
         {filteredItems.map((item) => {
-          const isActive = item.href === "/"
-            ? pathname === "/"
-            : pathname === item.href || pathname.startsWith(item.href + "/");
+          const isActive = pathname === item.href;
+          const Icon = item.icon;
+          
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
-                isActive
-                  ? "bg-blue-600/15 text-blue-400 border border-blue-500/20"
-                  : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"
-              }`}
-            >
-              <NavIcon icon={item.icon} />
-              {t(item.labelKey)}
+            <Link key={item.href} href={item.href} className="block group">
+              <div className={cn(
+                "relative flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                isActive 
+                  ? "bg-primary-500/10 text-primary-400 border border-primary-500/20 shadow-[0_0_20px_rgba(59,130,246,0.05)]" 
+                  : "text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent"
+              )}>
+                {isActive && (
+                  <motion.div 
+                    layoutId="sidebar-active"
+                    className="absolute left-0 w-1 h-5 bg-primary-500 rounded-r-full"
+                  />
+                )}
+                <Icon className={cn("w-5 h-5 transition-transform duration-200 group-hover:scale-110", isActive ? "text-primary-400" : "text-gray-500 group-hover:text-gray-300")} />
+                <span className="text-sm font-bold tracking-tight">{t(item.labelKey)}</span>
+                {isActive && <ChevronRight className="w-3.5 h-3.5 ml-auto opacity-50" />}
+              </div>
             </Link>
           );
         })}
       </nav>
 
-      {/* User info */}
-      <div className="px-4 py-4 border-t border-gray-800">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-700 text-gray-300 text-xs font-medium">
-            {session?.user?.email?.charAt(0).toUpperCase() ?? "?"}
+      {/* User Section */}
+      <div className="p-4 mt-auto border-t border-white/5 bg-[#161b22]/30 backdrop-blur-sm">
+        <div className="flex items-center gap-3 px-2 py-3 mb-2">
+          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-blue-600 flex items-center justify-center font-bold text-white shadow-lg border border-white/10">
+            {session?.user?.name?.[0] || "U"}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-gray-200 truncate">
-              {session?.user?.email ?? "Unknown"}
-            </p>
-            <p className="text-[10px] text-gray-500">
-              {isAdmin ? t("nav.admin") : t("nav.user")}
+            <p className="text-sm font-bold text-white truncate">{session?.user?.name || "User"}</p>
+            <p className="text-[10px] font-bold text-gray-500 truncate uppercase tracking-tighter">
+              {isAdmin ? "Administrator" : "Developer"}
             </p>
           </div>
-          <button
-            onClick={() => signOut()}
-            className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded-lg transition-colors"
-            title={t("nav.signout")}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-          </button>
         </div>
+        <button
+          onClick={() => signOut()}
+          className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-xs font-bold text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all duration-200"
+        >
+          <LogOut className="w-4 h-4" />
+          {t("nav.signout")}
+        </button>
       </div>
     </aside>
   );

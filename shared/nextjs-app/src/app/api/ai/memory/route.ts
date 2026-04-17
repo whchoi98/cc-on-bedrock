@@ -85,8 +85,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
-  const { question, answer, tools, inputTokens, outputTokens, responseTime } = body;
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+  }
+  const { question, answer, tools, inputTokens, outputTokens, responseTime } = body as {
+    question?: string; answer?: string; tools?: string[];
+    inputTokens?: number; outputTokens?: number; responseTime?: number;
+  };
   const userEmail = session.user.email ?? "default";
   const actorId = sanitizeId(userEmail);
   const sessionId = `session_${actorId}`;

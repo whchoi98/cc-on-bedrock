@@ -1,7 +1,7 @@
 # ADR-002: ALB에서 NLB + Nginx 동적 라우팅으로 전환
 
 ## Status
-Proposed (2026-03-26)
+Accepted (2026-04-01)
 
 ## Context
 현재 ALB Listener Rule 방식은 사용자별 1개 규칙 필요.
@@ -27,3 +27,22 @@ Nginx가 Host 헤더 기반으로 사용자 컨테이너에 라우팅.
 - Nginx ECS Service 관리 오버헤드 추가
 - DynamoDB Stream + Lambda로 config 동적 생성 필요
 - Nginx 장애 시 전체 라우팅 중단 → 2-3 Task 다중화 필수
+
+## Implementation
+
+전 구성요소 구현 완료.
+
+| 구성요소 | 구현 위치 |
+|---------|---------|
+| NLB (TCP passthrough) | `cdk/lib/04-ecs-devenv-stack.ts` — internet-facing, CloudFront prefix list 제한 |
+| Nginx ECS Fargate Service | 동일 파일 — 2 replicas, ARM64, Host 헤더 기반 라우팅 |
+| DynamoDB `cc-routing-table` | 동일 파일 — DynamoDB Streams (NEW_AND_OLD_IMAGES) |
+| Lambda `nginx-config-gen` | `cdk/lib/lambda/nginx-config-gen.py` — Stream 트리거, S3에 nginx.conf 업로드 |
+| Per-user 3-port routing | Nginx upstream: code-server(8080), frontend(3000), API(8000) |
+
+### 라우팅 경로
+```
+Browser → CloudFront (*.dev.domain) → Lambda@Edge (Cognito auth) → NLB (TCP 80) → Nginx (Fargate ×2) → EC2 user instance
+```
+
+Dashboard ALB는 별도 서비스로 `05-dashboard-stack.ts`에서 관리 (본 ADR scope 외).

@@ -12,7 +12,7 @@ export default async function UserPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-100">My Environment</h1>
         <p className="mt-1 text-sm text-gray-400">
-          Your container status, usage, and workspace info
+          Your instance status, usage, and workspace info
         </p>
       </div>
       <UserPortal user={session.user} />
