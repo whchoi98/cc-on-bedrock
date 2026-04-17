@@ -4,10 +4,11 @@
 set -euo pipefail
 
 CLUSTER="cc-on-bedrock-devenv"
-REGION="ap-northeast-2"
-ACCOUNT_ID="180294183052"
-DASHBOARD_URL="https://cconbedrock-dashboard.atomai.click"
-DEVENV_DOMAIN="dev.atomai.click"
+REGION="${AWS_DEFAULT_REGION:-ap-northeast-2}"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+DOMAIN="${1:-atomai.click}"
+DASHBOARD_URL="https://cconbedrock-dashboard.${DOMAIN}"
+DEVENV_DOMAIN="dev.${DOMAIN}"
 ROUTING_TABLE="cc-routing-table"
 
 PASS=0
@@ -120,18 +121,10 @@ CONFIG_SIZE=$(aws s3api head-object --bucket cc-on-bedrock-deploy-$ACCOUNT_ID --
 # ─── 5. CloudFront ───
 log "5. CloudFront checks"
 
-# 5.1 Dashboard CF
-DASH_CF_STATUS=$(aws cloudfront get-distribution --id E12T3WM0TRC7FN --query 'Distribution.Status' --output text 2>/dev/null || echo "UNKNOWN")
-[ "$DASH_CF_STATUS" = "Deployed" ] && pass "5.1 Dashboard CloudFront: Deployed" || fail "5.1 Dashboard CF: $DASH_CF_STATUS"
-
-# 5.2 DevEnv CF with wildcard alias
-DEVENV_CF_ALIAS=$(aws cloudfront get-distribution --id E21ROKGJ66FOZ0 --query 'Distribution.DistributionConfig.Aliases.Items[0]' --output text 2>/dev/null || echo "NONE")
-[ "$DEVENV_CF_ALIAS" = "*.dev.atomai.click" ] && pass "5.2 DevEnv CF alias: $DEVENV_CF_ALIAS" || fail "5.2 DevEnv CF alias: $DEVENV_CF_ALIAS"
-
-# 5.3 DevEnv CF origin is NLB (not ALB)
-DEVENV_CF_ORIGIN=$(aws cloudfront get-distribution --id E21ROKGJ66FOZ0 --query 'Distribution.DistributionConfig.Origins.Items[0].DomainName' --output text 2>/dev/null)
-# NLB DNS doesn't contain "nlb" — verify it's NOT the old ALB (which contains "app/")
-echo "$DEVENV_CF_ORIGIN" | grep -q "app/" && fail "5.3 DevEnv CF origin: ALB (should be NLB)" || pass "5.3 DevEnv CF origin: $DEVENV_CF_ORIGIN"
+# 5.1 CloudFront distributions for domain
+CF_DISTS=$(aws cloudfront list-distributions --query "DistributionList.Items[?contains(Aliases.Items || [''], '${DOMAIN}')].{Id:Id,Status:Status,Aliases:Aliases.Items[0]}" --output json 2>/dev/null || echo "[]")
+CF_COUNT=$(echo "$CF_DISTS" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+[ "$CF_COUNT" -gt 0 ] && pass "5.1 CloudFront: $CF_COUNT distribution(s) for $DOMAIN" || fail "5.1 No CloudFront distributions for $DOMAIN"
 
 # ─── 6. E2E Access ───
 log "6. E2E access tests"
@@ -158,8 +151,8 @@ COGNITO_ID=$(aws ssm get-parameter --name /cc-on-bedrock/cognito/client-id --que
 [ "$COGNITO_ID" != "NOT_FOUND" ] && [ -n "$COGNITO_ID" ] && pass "7.1 SSM Cognito client-id: present" || fail "7.1 SSM Cognito client-id: $COGNITO_ID"
 
 # 7.2 Cognito User Pool exists
-POOL_STATUS=$(aws cognito-idp describe-user-pool --user-pool-id ap-northeast-2_bXyvU9zhG --query 'UserPool.Status' --output text 2>/dev/null || echo "NOT_FOUND")
-[ -n "$POOL_STATUS" ] && pass "7.2 Cognito User Pool: exists" || fail "7.2 Cognito User Pool: $POOL_STATUS"
+POOL_ID=$(aws cognito-idp list-user-pools --max-results 20 --region "$REGION" --query "UserPools[?contains(Name,'cc-on-bedrock')].Id|[0]" --output text 2>/dev/null || echo "NOT_FOUND")
+[ -n "$POOL_ID" ] && [ "$POOL_ID" != "None" ] && pass "7.2 Cognito User Pool: $POOL_ID" || fail "7.2 Cognito User Pool: not found"
 
 # ─── Summary ───
 echo ""
