@@ -11,8 +11,8 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 7 stacks.
 - `lib/01-network-stack.ts` - VPC, Subnets, NAT, VPC Endpoints, Route 53
 - `lib/02-security-stack.ts` - Cognito (Hosted UI domain 포함), ACM, KMS, Secrets Manager, IAM
 - `lib/03-usage-tracking-stack.ts` - DynamoDB (사용량 저장), Lambda (EventBridge 트리거), EventBridge Rules
-- `lib/04-ecs-devenv-stack.ts` - ECS Cluster, NLB+Nginx, DynamoDB Routing, CloudFront
-- `lib/05-dashboard-stack.ts` - Dashboard EC2 ASG, ALB, CloudFront
+- `lib/04-ecs-devenv-stack.ts` - ECS Cluster, NLB+Nginx, DynamoDB Routing (CF 제거 → Stack 05로 통합, ADR-013)
+- `lib/05-dashboard-stack.ts` - Dashboard ECS Ec2Service, ALB, Unified CloudFront (Dashboard + DevEnv, ADR-013), Lambda@Edge (session-validator, origin-router)
 - `lib/06-waf-stack.ts` - WAF WebACL (CloudFront, ALB)
 - `lib/07-ec2-devenv-stack.ts` - EC2-per-user DevEnv: Launch Template, DLP SG(open/restricted/locked), IAM Role, Instance Profile, DynamoDB(cc-user-instances)
 
@@ -23,6 +23,8 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 7 stacks.
 - `lib/lambda/ec2-idle-stop.py` - EC2 유휴 자동 중지 + Hibernate 지원 (ADR-010)
 - `lib/lambda/gateway-manager.py` - MCP Gateway 관리
 - `lib/lambda/audit-logger.py` - 감사 로그
+- `lib/lambda/devenv-session-validator/index.js` - NextAuth JWE 쿠키 검증 (Lambda@Edge viewer-request, ADR-013)
+- `lib/lambda/devenv-origin-router/index.js` - Host 기반 origin 라우팅 (Lambda@Edge origin-request, ADR-013)
 
 ## Rules
 - IAM Role은 사용하는 스택에서 생성 (cross-stack cyclic ref 방지)

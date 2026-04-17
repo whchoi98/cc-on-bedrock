@@ -2,7 +2,9 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as path from 'path';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as route53 from 'aws-cdk-lib/aws-route53';
@@ -23,6 +25,7 @@ export interface DashboardStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   dashboardCertificateArn?: string;
   cloudfrontCertificateArn?: string;
+  unifiedCertificateArn?: string;
   hostedZone?: route53.IHostedZone;
   userPool: cognito.UserPool;
   sgOpen: ec2.ISecurityGroup;
@@ -31,6 +34,7 @@ export interface DashboardStackProps extends cdk.StackProps {
   ecsInfrastructureRoleArn?: string;
   webAclArn?: string;
   dnsFirewallRuleGroupId?: string;
+  nlbDnsName: string;
 }
 
 export class DashboardStack extends cdk.Stack {
@@ -39,7 +43,8 @@ export class DashboardStack extends cdk.Stack {
 
     const { config, vpc, encryptionKey,
             dashboardCertificateArn, cloudfrontCertificateArn,
-            userPool, webAclArn } = props;
+            userPool, webAclArn, nlbDnsName } = props;
+    const unifiedCertArn = props.unifiedCertificateArn;
 
     // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
     const hostedZone = config.hostedZoneId
@@ -302,6 +307,7 @@ export class DashboardStack extends cdk.Stack {
         ECS_INFRASTRUCTURE_ROLE_ARN: props.ecsInfrastructureRoleArn ?? '',
         KMS_KEY_ARN: encryptionKey.keyArn,
         HIBERNATE_ENABLED: 'true',  // ADR-010: EC2 Hibernation support
+        COOKIE_DOMAIN: `.${config.domainName}`,  // ADR-013: shared cookie for unified auth
       },
       secrets: {
         NEXTAUTH_SECRET: ecs.Secret.fromSecretsManager(nextAuthSecret),
@@ -368,7 +374,87 @@ export class DashboardStack extends cdk.Stack {
       },
     });
 
-    // ─── CloudFront Distribution ───
+    // ─── Lambda@Edge: Unified Auth + Origin Routing (ADR-013) ───
+    const devDomain = `${config.devSubdomain}.${config.domainName}`;
+    const dashboardUrl = `https://${config.dashboardSubdomain}.${config.domainName}`;
+
+    // NextAuth secret SSM parameter (for session validator to decrypt JWE cookies)
+    const nextAuthSecretValue = nextAuthSecret.secretValue.unsafeUnwrap();
+    new ssm.StringParameter(this, 'NextAuthSecretParam', {
+      parameterName: '/cc-on-bedrock/nextauth-secret',
+      description: 'NextAuth secret for Lambda@Edge session validation',
+      stringValue: nextAuthSecretValue,
+    });
+
+    // Session Validator — validates NextAuth cookie for *.dev.* requests
+    const sessionValidatorFn = new cloudfront.experimental.EdgeFunction(this, 'SessionValidator', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda/devenv-session-validator'), {
+        bundling: {
+          image: cdk.DockerImage.fromRegistry('node:20-alpine'),
+          command: [
+            'sh', '-c',
+            `sed -e "s|__DEV_DOMAIN__|${devDomain}|g" \
+                 -e "s|__DASHBOARD_URL__|${dashboardUrl}|g" \
+                 -e "s|__SSM_REGION__|ap-northeast-2|g" \
+                 /asset-input/index.js > /asset-output/index.js`,
+          ],
+        },
+      }),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      description: 'NextAuth session validation for *.dev.atomai.click (ADR-013)',
+    });
+    sessionValidatorFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [`arn:aws:ssm:ap-northeast-2:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/nextauth-secret`],
+    }));
+
+    // Origin Router — routes *.dev.* to NLB, everything else to ALB (default)
+    // NLB DNS and CF secret come from CloudFormation tokens (Fn::ImportValue, Secrets Manager)
+    // that only resolve at deploy time, so they CANNOT be baked in via sed at build time.
+    // Store them in SSM and load at Lambda runtime (same cold-start caching as session-validator).
+    const cloudfrontSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedCfSecret',
+      `arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/cloudfront-secret-lZMDiE`);
+    const originConfigParam = new ssm.StringParameter(this, 'OriginRouterConfigParam', {
+      parameterName: '/cc-on-bedrock/devenv-origin-config',
+      description: 'NLB DNS + CF secret for Lambda@Edge origin router (ADR-013)',
+      stringValue: cdk.Fn.sub('{"nlbDns":"${NlbDns}","cfSecret":"${CfSecret}"}', {
+        NlbDns: nlbDnsName,
+        CfSecret: cloudfrontSecret.secretValue.unsafeUnwrap(),
+      }),
+    });
+
+    const originRouterFn = new cloudfront.experimental.EdgeFunction(this, 'OriginRouter', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda/devenv-origin-router'), {
+        bundling: {
+          image: cdk.DockerImage.fromRegistry('node:20-alpine'),
+          command: [
+            'sh', '-c',
+            `sed -e "s|__DEV_DOMAIN__|${devDomain}|g" \
+                 -e "s|__SSM_REGION__|ap-northeast-2|g" \
+                 /asset-input/index.js > /asset-output/index.js`,
+          ],
+        },
+      }),
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      description: 'Host-based origin routing for unified CloudFront (ADR-013)',
+    });
+    originRouterFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [originConfigParam.parameterArn],
+    }));
+
+    // ─── Unified CloudFront Distribution (Dashboard + DevEnv) ───
+    const certArn = unifiedCertArn || cloudfrontCertificateArn;
+    const domainNames = certArn
+      ? [`${config.dashboardSubdomain}.${config.domainName}`, `*.${config.devSubdomain}.${config.domainName}`]
+      : undefined;
+
     const distribution = new cloudfront.Distribution(this, 'DashboardCf', {
       webAclId: webAclArn,
       defaultBehavior: {
@@ -381,18 +467,27 @@ export class DashboardStack extends cdk.Stack {
         allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+        edgeLambdas: [
+          { eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST, functionVersion: sessionValidatorFn.currentVersion },
+          { eventType: cloudfront.LambdaEdgeEventType.ORIGIN_REQUEST, functionVersion: originRouterFn.currentVersion },
+        ],
       },
-      comment: 'CC-on-Bedrock Dashboard',
-      ...(cloudfrontCertificateArn ? {
-        domainNames: [`${config.dashboardSubdomain}.${config.domainName}`],
-        certificate: acm.Certificate.fromCertificateArn(this, 'CfCert', cloudfrontCertificateArn),
+      comment: 'CC-on-Bedrock Unified (Dashboard + DevEnv)',
+      ...(certArn ? {
+        domainNames,
+        certificate: acm.Certificate.fromCertificateArn(this, 'CfCert', certArn),
       } : {}),
     });
 
-    // Route 53 Record
+    // Route 53 Records — Dashboard + DevEnv wildcard (both point to unified CF)
     new route53.ARecord(this, 'DashboardRecord', {
       zone: hostedZone,
       recordName: config.dashboardSubdomain,
+      target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
+    });
+    new route53.ARecord(this, 'DevEnvWildcard', {
+      zone: hostedZone,
+      recordName: `*.${config.devSubdomain}`,
       target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
     });
 

@@ -255,7 +255,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
       `bind-addr: 0.0.0.0:8080`,
       `auth: password`,
-      `password: ${codeserverPassword}`,
+      `password: "${codeserverPassword}"`,
       `cert: false`,
       `CSCFG`,
       `chown -R coder:coder /home/coder/.config`,
@@ -594,7 +594,7 @@ export async function restoreFromSnapshot(
       `cat > /home/coder/.config/code-server/config.yaml << 'CSCFG'`,
       `bind-addr: 0.0.0.0:8080`,
       `auth: password`,
-      `password: ${codeserverPassword}`,
+      `password: "${codeserverPassword}"`,
       `cert: false`,
       `CSCFG`,
       `chown -R coder:coder /home/coder/.config`,
@@ -1029,7 +1029,7 @@ async function syncCodeserverPassword(instanceId: string, subdomain: string): Pr
       DocumentName: "AWS-RunShellScript",
       Parameters: {
         commands: [
-          `sed -i "s/^password:.*/password: ${password}/" /home/coder/.config/code-server/config.yaml`,
+          `sed -i 's/^password:.*/password: "${password}"/' /home/coder/.config/code-server/config.yaml`,
           `systemctl restart code-server 2>/dev/null || true`,
         ],
       },
