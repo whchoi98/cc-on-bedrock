@@ -160,6 +160,8 @@ def normalize_model(model_id: str) -> str:
         if model_id.endswith(suffix):
             model_id = model_id[:-len(suffix)]
             break
+    # Strip date suffixes (e.g., claude-haiku-4-5-20251001 → claude-haiku-4-5)
+    model_id = re.sub(r"-\d{8}$", "", model_id)
     return model_id or "unknown"
 
 

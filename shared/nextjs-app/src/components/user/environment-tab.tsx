@@ -63,7 +63,7 @@ export default function EnvironmentTab({ user, container, setContainer, fetchDat
   const devenvBaseUrl = effectiveSubdomain
     ? `https://${effectiveSubdomain}.${devSubdomain}.${domainName}`
     : null;
-  const codeServerUrl = devenvBaseUrl ? `${devenvBaseUrl}/?folder=/home/coder` : null;
+  const codeServerUrl = devenvBaseUrl ? `${devenvBaseUrl}/?folder=/home/coder/workspace` : null;
   const frontendUrl = devenvBaseUrl;  // root → port 3000
   const apiUrl = devenvBaseUrl ? `${devenvBaseUrl}/api/` : null;  // /api/ → port 8000
 
