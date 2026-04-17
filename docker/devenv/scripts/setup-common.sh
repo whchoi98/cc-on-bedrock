@@ -56,6 +56,7 @@ coder ALL=(root) NOPASSWD: /usr/bin/code-server
 coder ALL=(root) NOPASSWD: /usr/local/bin/npm
 coder ALL=(root) NOPASSWD: /usr/local/bin/npx
 coder ALL=(root) NOPASSWD: /usr/bin/pip3
+coder ALL=(root) NOPASSWD: /usr/bin/apt
 coder ALL=(root) NOPASSWD: /usr/bin/apt-get
 coder ALL=(root) NOPASSWD: /usr/bin/dnf
 coder ALL=(root) NOPASSWD: /usr/bin/yum

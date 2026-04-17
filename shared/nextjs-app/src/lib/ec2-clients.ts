@@ -246,6 +246,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `coder ALL=(root) NOPASSWD: /usr/local/bin/npm`,
       `coder ALL=(root) NOPASSWD: /usr/local/bin/npx`,
       `coder ALL=(root) NOPASSWD: /usr/bin/pip3`,
+      `coder ALL=(root) NOPASSWD: /usr/bin/apt`,
       `coder ALL=(root) NOPASSWD: /usr/bin/apt-get`,
       `coder ALL=(root) NOPASSWD: /usr/bin/dnf`,
       `coder ALL=(root) NOPASSWD: /usr/bin/yum`,
@@ -1209,12 +1210,12 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
   ];
 
   // Check if role already exists
+  let roleExists = false;
   try {
     await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
-    // Sync cost allocation tags on existing role (ensures tags stay current)
+    roleExists = true;
     await iamClient.send(new TagRoleCommand({ RoleName: roleName, Tags: costAllocationTags }));
   } catch {
-    // Create per-user role with EC2 trust
     console.log(`[IAM] Creating per-user role: ${roleName}`);
     await iamClient.send(new CreateRoleCommand({
       RoleName: roleName,
@@ -1235,41 +1236,41 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
       ],
     }));
 
-    // Attach Bedrock + SSM + CloudWatch permissions
-    await iamClient.send(new PutRolePolicyCommand({
-      RoleName: roleName,
-      PolicyName: "DevenvAccess",
-      PolicyDocument: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Sid: "BedrockClaude",
-            Effect: "Allow",
-            Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
-            Resource: [
-              `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
-              `arn:aws:bedrock:*:${accountId}:inference-profile/*anthropic.claude-*`,
-            ],
-          },
-          {
-            Sid: "SSMSessionManager",
-            Effect: "Allow",
-            Action: ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel", "ssm:UpdateInstanceInformation"],
-            Resource: "*",
-          },
-          {
-            Sid: "CloudWatch",
-            Effect: "Allow",
-            Action: ["cloudwatch:PutMetricData", "logs:CreateLogStream", "logs:PutLogEvents"],
-            Resource: "*",
-          },
-        ],
-      }),
-    }));
-
-    // Wait for IAM propagation
+    // Wait for IAM propagation (new role only)
     await new Promise(r => setTimeout(r, 8000));
   }
+
+  // Upsert Bedrock + SSM + CloudWatch permissions (runs on every start to fix legacy roles)
+  await iamClient.send(new PutRolePolicyCommand({
+    RoleName: roleName,
+    PolicyName: "DevenvAccess",
+    PolicyDocument: JSON.stringify({
+      Version: "2012-10-17",
+      Statement: [
+        {
+          Sid: "BedrockClaude",
+          Effect: "Allow",
+          Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
+          Resource: [
+            `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
+            `arn:aws:bedrock:*:${accountId}:inference-profile/*anthropic.claude-*`,
+          ],
+        },
+        {
+          Sid: "SSMSessionManager",
+          Effect: "Allow",
+          Action: ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel", "ssm:UpdateInstanceInformation"],
+          Resource: "*",
+        },
+        {
+          Sid: "CloudWatch",
+          Effect: "Allow",
+          Action: ["cloudwatch:PutMetricData", "logs:CreateLogStream", "logs:PutLogEvents", "logs:CreateLogGroup"],
+          Resource: "*",
+        },
+      ],
+    }),
+  }));
 
   // Apply AgentCore Gateway access policy (updates on every start to reflect dept changes)
   await applyGatewayPolicy(roleName, department);
