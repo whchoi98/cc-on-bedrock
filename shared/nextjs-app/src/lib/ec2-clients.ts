@@ -277,8 +277,9 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
-      `# Upgrade Claude Code CLI`,
-      `curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null || true`,
+      `# Upgrade Claude Code CLI (installs to ~/.local/bin, symlink to /usr/local/bin)`,
+      `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
+      `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
     ].join("\n")).toString("base64"),
   }));
 
@@ -625,8 +626,9 @@ export async function restoreFromSnapshot(
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
-      `# Upgrade Claude Code CLI`,
-      `curl -fsSL https://claude.ai/install.sh | bash 2>/dev/null || true`,
+      `# Upgrade Claude Code CLI (installs to ~/.local/bin, symlink to /usr/local/bin)`,
+      `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
+      `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
     ].join("\n")).toString("base64"),
   }));
 
@@ -1081,8 +1083,9 @@ async function postStartSetup(instanceId: string): Promise<void> {
       DocumentName: "AWS-RunShellScript",
       Parameters: {
         commands: [
-          `# Upgrade Claude Code CLI`,
-          `curl -fsSL https://claude.ai/install.sh | bash 2>&1 || true`,
+          `# Upgrade Claude Code CLI (as coder user, symlink to /usr/local/bin)`,
+          `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1 || true`,
+          `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
           `# Start CWAgent for memory/disk metrics`,
           `if command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
           `  amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || amazon-cloudwatch-agent-ctl -a start 2>/dev/null || true`,
