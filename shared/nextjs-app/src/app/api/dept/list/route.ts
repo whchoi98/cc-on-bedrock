@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { listCognitoUsers } from "@/lib/aws-clients";
 import { getDepartmentSummaries } from "@/lib/usage-client";
-import { DynamoDBClient, ScanCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, ScanCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { DepartmentListItem } from "@/lib/types";
 
@@ -29,10 +29,9 @@ export async function GET() {
       listCognitoUsers(),
       getDepartmentSummaries(),
       dynamodb.send(new ScanCommand({ TableName: DEPT_BUDGETS_TABLE })).catch(() => ({ Items: [] })),
-      dynamodb.send(new QueryCommand({
+      dynamodb.send(new ScanCommand({
         TableName: APPROVAL_REQUESTS_TABLE,
-        IndexName: "status-index",
-        KeyConditionExpression: "#status = :pending",
+        FilterExpression: "#status = :pending",
         ExpressionAttributeNames: { "#status": "status" },
         ExpressionAttributeValues: { ":pending": { S: "pending" } },
       })).catch(() => ({ Items: [] })),
@@ -73,8 +72,6 @@ export async function GET() {
       const totalCost = usage?.totalCost ?? 0;
       return {
         department: dept,
-        userCount: memberMap.get(dept) ?? 0,
-        activeContainers: 0,
         memberCount: memberMap.get(dept) ?? 0,
         totalCost,
         totalTokens: usage?.totalTokens ?? 0,
