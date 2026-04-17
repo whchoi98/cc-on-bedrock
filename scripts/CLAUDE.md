@@ -26,7 +26,7 @@
 - `seed-mcp-catalog.py` - MCP 서버 카탈로그 시드 데이터
 
 ## Utility
-- `migrate-role-tags.sh` - IAM role tag 마이그레이션
+- (없음 — IAM role 태그는 ec2-clients.ts에서 매 시작 시 자동 upsert)
 
 ## Rules
 - 모든 스크립트는 `set -euo pipefail`로 시작
