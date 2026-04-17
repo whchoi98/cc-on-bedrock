@@ -9,9 +9,8 @@ graph TB
         DevUser["Developer User"]
     end
 
-    subgraph CloudFront["CloudFront Distributions"]
-        CF_Dashboard["CloudFront<br/>cconbedrock-dashboard.whchoi.net"]
-        CF_DevEnv["CloudFront<br/>*.dev.whchoi.net"]
+    subgraph CloudFront["CloudFront (Unified, ADR-013)"]
+        CF_Unified["CloudFront<br/>dashboard + *.dev<br/>Lambda@Edge: Session Validator + Origin Router"]
     end
 
     subgraph Stack01["Stack 01: Network"]
@@ -70,7 +69,7 @@ graph TB
     end
 
     subgraph Stack07["Stack 07: EC2 DevEnv (ADR-004)"]
-        EC2_Instances["Per-user EC2<br/>ARM64 (t4g.medium~large)"]
+        EC2_Instances["Per-user EC2<br/>ARM64 (t4g.medium~large)<br/>Hibernation support"]
         EC2_EBS["EBS Root Volume<br/>(state preserved on Stop)"]
         EC2_Profile["Per-user Instance Profile<br/>cc-on-bedrock-task-{subdomain}"]
         RoutingTable["DynamoDB<br/>cc-routing-table"]
@@ -83,14 +82,13 @@ graph TB
         CW["CloudWatch<br/>CloudWatch Agent"]
     end
 
-    %% User Access Flow
-    AdminUser -->|HTTPS| CF_Dashboard
-    DevUser -->|HTTPS| CF_Dashboard
-    DevUser -->|HTTPS| CF_DevEnv
+    %% User Access Flow (single CF, ADR-013)
+    AdminUser -->|HTTPS| CF_Unified
+    DevUser -->|HTTPS| CF_Unified
 
-    %% CloudFront to ALB
-    CF_Dashboard -->|X-Custom-Secret| Dash_ALB
-    CF_DevEnv -->|X-Custom-Secret| DevEnv_ALB
+    %% CloudFront Origin Routing (Lambda@Edge)
+    CF_Unified -->|Host=dashboard.*| Dash_ALB
+    CF_Unified -->|Host=*.dev.*| DevEnv_ALB
 
     %% Dashboard Flow
     Dash_ALB --> DashContainer
@@ -137,9 +135,9 @@ graph TB
     EC2_Instances --> CW
     DashContainer --> CW
 
-    %% DNS
-    R53 -->|CNAME| CF_Dashboard
-    R53 -->|Wildcard| CF_DevEnv
+    %% DNS (both records → unified CF)
+    R53 -->|dashboard.*| CF_Unified
+    R53 -->|*.dev.*| CF_Unified
 
     %% Network placement
     Dash_ALB -.-> PubA
@@ -165,9 +163,9 @@ graph TB
 graph LR
     S1["01 Network<br/>VPC, Subnets, NAT,<br/>VPC Endpoints, R53,<br/>DNS Firewall"] --> S2["02 Security<br/>Cognito, ACM, KMS,<br/>Secrets, Per-user IAM"]
     S2 --> S3["03 Usage Tracking<br/>DynamoDB, Lambda,<br/>EventBridge, CloudTrail,<br/>MCP Gateway Mgr (ADR-007)"]
-    S2 --> S4["04 ECS Cluster<br/>Nginx (Fargate),<br/>ASG, NLB, CloudFront"]
+    S2 --> S4["04 ECS Cluster<br/>Nginx (Fargate),<br/>ASG, NLB"]
     S2 --> S7["07 EC2 DevEnv<br/>Per-user EC2,<br/>Instance Profile, SG"]
-    S4 --> S5["05 Dashboard<br/>ECS Ec2Service,<br/>ALB, CloudFront"]
+    S4 --> S5["05 Dashboard<br/>ECS Ec2Service, ALB,<br/>Unified CF (ADR-013)"]
     S3 --> S5
     S7 --> S4
 ```
@@ -295,6 +293,28 @@ sequenceDiagram
     Bedrock-->>EC2: 12. Streamed response
     Note over EC2: 45min idle → auto-stop
 ```
+
+## EC2 Instance Lifecycle (ADR-010: Hibernation)
+
+EC2 Hibernation enables ~5s resume (vs 30-60s cold start) by saving RAM to encrypted EBS.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Running: Start / Resume
+    Running --> Stopping: User Stop / Idle 45min / EOD
+    Stopping --> Hibernated: Hibernate=true (RAM→EBS)
+    Stopping --> Stopped: Hibernate=false or fallback
+    Hibernated --> Running: Resume (~5s, RAM restored)
+    Stopped --> Running: Start (~30-60s, cold boot)
+    Running --> Stopping: changeTier (force Stop)
+    Stopped --> [*]: Terminate
+```
+
+Key behaviors:
+- **Feature flag** (`HIBERNATE_ENABLED`): per-instance capability check via `HibernationOptions.Configured`
+- **Graceful fallback**: hibernate failure → automatic regular Stop
+- **changeTier/switchOs**: always uses regular Stop (instance type change requires cold restart)
+- **60-day limit**: rotation Lambda auto-restarts instances approaching AWS maximum
 
 ## Bedrock Access (Direct Mode)
 
@@ -424,3 +444,5 @@ graph LR
     style DDB fill:#4053d6,color:#fff
     style BudgetDB fill:#4053d6,color:#fff
 ```
+
+**CloudWatch Cost Optimization**: `textDataDeliveryEnabled: false` on Bedrock invocation logging — disables full request/response text delivery, keeping only metadata (model ID, token counts, latency). Reduces CloudWatch Logs cost by ~99% while preserving all data needed for usage tracking and budget enforcement.

@@ -74,31 +74,26 @@ const wafStack = new WafStack(app, 'CcOnBedrock-WAF', {
   description: 'CC-on-Bedrock: WAF WebACL for CloudFront distributions',
 });
 
-// Stack 04: ECS Dev Environment
+// Stack 04: ECS Dev Environment (NLB + Nginx only — CF moved to Stack 05, ADR-013)
 const ecsDevenvStack = new EcsDevenvStack(app, 'CcOnBedrock-EcsDevenv', {
-  env, config, crossRegionReferences: true,
+  env, config,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
-  devEnvCertificateArn: app.node.tryGetContext('devEnvCertArn'),
-  // hostedZone imported directly from config to avoid cross-stack export dependency
   taskPermissionBoundary: securityStack.taskPermissionBoundary,
   webAclArn: wafStack.webAclArn,
-  // DevEnv Cognito auth (Lambda@Edge at CloudFront edge)
-  userPool: securityStack.userPool,
-  devenvAuthClient: securityStack.devenvAuthClient,
-  devenvAuthCookieSecret: securityStack.devenvAuthCookieSecret,
-  description: 'CC-on-Bedrock: ECS Cluster, Task Definitions, EFS, CloudFront',
+  description: 'CC-on-Bedrock: ECS Cluster, NLB, Nginx Routing',
 });
 ecsDevenvStack.addDependency(securityStack);
 ecsDevenvStack.addDependency(wafStack);
 
-// Stack 05: Dashboard
+// Stack 05: Dashboard + Unified CloudFront (ADR-013: Dashboard + DevEnv in single CF)
 const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   env, config, crossRegionReferences: true,
   vpc: networkStack.vpc,
   encryptionKey: securityStack.encryptionKey,
   dashboardCertificateArn: app.node.tryGetContext('dashboardCertArn'),
   cloudfrontCertificateArn: app.node.tryGetContext('cloudfrontCertArn'),
+  unifiedCertificateArn: app.node.tryGetContext('unifiedCertArn'),
   // hostedZone imported directly from config to avoid cross-stack export dependency
   userPool: securityStack.userPool,
   sgOpen: ecsDevenvStack.sgOpen,
@@ -107,7 +102,8 @@ const dashboardStack = new DashboardStack(app, 'CcOnBedrock-Dashboard', {
   ecsInfrastructureRoleArn: securityStack.ecsInfrastructureRole.roleArn,
   webAclArn: wafStack.webAclArn,
   dnsFirewallRuleGroupId: networkStack.dnsFirewallRuleGroupId,
-  description: 'CC-on-Bedrock: Next.js Dashboard, ALB, CloudFront',
+  nlbDnsName: cdk.Fn.importValue('cc-devenv-nlb-dns'),
+  description: 'CC-on-Bedrock: Unified Dashboard + DevEnv CloudFront',
 });
 dashboardStack.addDependency(ecsDevenvStack);
 dashboardStack.addDependency(wafStack);

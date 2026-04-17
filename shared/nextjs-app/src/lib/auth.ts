@@ -161,7 +161,8 @@ export const authOptions: NextAuthOptions = {
   cookies: (() => {
     const useSecure = process.env.NODE_ENV === "production" ||
       (process.env.NEXTAUTH_URL?.startsWith("https") ?? false);
-    const opts = { httpOnly: true, sameSite: "lax" as const, path: "/", secure: useSecure };
+    const cookieDomain = process.env.COOKIE_DOMAIN || undefined;
+    const opts = { httpOnly: true, sameSite: "lax" as const, path: "/", secure: useSecure, ...(cookieDomain ? { domain: cookieDomain } : {}) };
     const prefix = useSecure ? "__Secure-next-auth" : "next-auth";
     return {
       sessionToken: { name: `${prefix}.session-token`, options: opts },

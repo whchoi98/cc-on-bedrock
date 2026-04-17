@@ -5,16 +5,9 @@ import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
-import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
-import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as route53 from 'aws-cdk-lib/aws-route53';
-import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
-import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -27,14 +20,8 @@ export interface EcsDevenvStackProps extends cdk.StackProps {
   config: CcOnBedrockConfig;
   vpc: ec2.Vpc;
   encryptionKey: kms.Key;
-  devEnvCertificateArn?: string;
-  hostedZone?: route53.IHostedZone;
   taskPermissionBoundary?: iam.IManagedPolicy;
   webAclArn?: string;
-  // DevEnv Cognito auth (Lambda@Edge)
-  userPool?: cognito.UserPool;
-  devenvAuthClient?: cognito.UserPoolClient;
-  devenvAuthCookieSecret?: secretsmanager.Secret;
 }
 
 export class EcsDevenvStack extends cdk.Stack {
@@ -46,20 +33,11 @@ export class EcsDevenvStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsDevenvStackProps) {
     super(scope, id, props);
 
-    const { config, vpc, encryptionKey,
-            devEnvCertificateArn, webAclArn } = props;
+    const { config, vpc, encryptionKey, webAclArn } = props;
 
-    // Import CloudFront secret by ARN (avoids cross-stack export + synth-time resolution)
+    // Import CloudFront secret (Nginx validates X-Custom-Secret from CloudFront)
     const cloudfrontSecret = secretsmanager.Secret.fromSecretCompleteArn(this, 'ImportedCfSecret',
       `arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/cloudfront-secret-lZMDiE`);
-
-    // Import hosted zone directly (avoids cross-stack export dependency on Network stack)
-    const hostedZone = config.hostedZoneId
-      ? route53.HostedZone.fromHostedZoneAttributes(this, 'ImportedHostedZone', {
-          hostedZoneId: config.hostedZoneId,
-          zoneName: config.domainName,
-        })
-      : props.hostedZone!;
 
     // ECS Task Role (created in this stack to avoid cross-stack cyclic references)
     const ecsTaskRole = new iam.Role(this, 'EcsTaskRole', {
@@ -263,100 +241,6 @@ export class EcsDevenvStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    // ─── Lambda@Edge: Cognito Auth for DevEnv ───
-    // Static values are baked into the JS source at synth time.
-    // Dynamic values (CDK tokens: client ID, secrets, pool ID) go into SSM Parameter Store
-    // and are read by the Lambda on cold start, because EdgeFunction's auto-created us-east-1
-    // stack cannot resolve cross-region CDK token references.
-    const devDomain = `${config.devSubdomain}.${config.domainName}`;
-    const cognitoDomain = `${config.cognitoDomainPrefix}.auth.ap-northeast-2.amazoncognito.com`;
-    const callbackUrl = `https://auth.${devDomain}/_auth/callback`;
-
-    let edgeLambdas: cloudfront.EdgeLambda[] | undefined;
-    if (props.devenvAuthClient && props.devenvAuthCookieSecret && props.userPool) {
-      // SSM parameter stores dynamic config (resolved by CloudFormation at deploy time)
-      new ssm.StringParameter(this, 'DevEnvAuthConfig', {
-        parameterName: '/cc-on-bedrock/devenv-auth-config',
-        description: 'Lambda@Edge auth config for *.dev.atomai.click (JSON)',
-        stringValue: cdk.Fn.sub(JSON.stringify({
-          clientId: '${ClientId}',
-          clientSecret: '${ClientSecret}',
-          cookieSecret: '${CookieSecret}',
-          userPoolId: '${UserPoolId}',
-          region: '${AWS::Region}',
-        }), {
-          ClientId: props.devenvAuthClient.userPoolClientId,
-          ClientSecret: props.devenvAuthClient.userPoolClientSecret.unsafeUnwrap(),
-          CookieSecret: props.devenvAuthCookieSecret.secretValue.unsafeUnwrap(),
-          UserPoolId: props.userPool.userPoolId,
-        }),
-      });
-
-      const authEdgeFunction = new cloudfront.experimental.EdgeFunction(this, 'DevEnvAuthEdge', {
-        runtime: lambda.Runtime.NODEJS_20_X,
-        handler: 'index.handler',
-        code: lambda.Code.fromAsset(path.join(__dirname, 'lambda/devenv-auth-edge'), {
-          // Replace static placeholders in JS source during asset bundling
-          bundling: {
-            image: cdk.DockerImage.fromRegistry('node:20-alpine'),
-            command: [
-              'sh', '-c',
-              `sed -e "s|__COGNITO_DOMAIN__|${cognitoDomain}|g" \
-                   -e "s|__DEV_DOMAIN__|${devDomain}|g" \
-                   -e "s|__CALLBACK_URL__|${callbackUrl}|g" \
-                   -e "s|__SSM_REGION__|ap-northeast-2|g" \
-                   /asset-input/index.js > /asset-output/index.js`,
-            ],
-          },
-        }),
-        timeout: cdk.Duration.seconds(5),
-        memorySize: 128,
-        description: 'Cognito auth for *.dev.atomai.click',
-      });
-
-      // Grant edge function permission to read SSM config from ap-northeast-2
-      authEdgeFunction.addToRolePolicy(new iam.PolicyStatement({
-        actions: ['ssm:GetParameter'],
-        resources: [`arn:aws:ssm:ap-northeast-2:${cdk.Aws.ACCOUNT_ID}:parameter/cc-on-bedrock/devenv-auth-config`],
-      }));
-
-      edgeLambdas = [{
-        eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
-        functionVersion: authEdgeFunction.currentVersion,
-      }];
-    }
-
-    // CloudFront Distribution — origin is NLB (via Nginx), not ALB
-    const distribution = new cloudfront.Distribution(this, 'DevenvCf', {
-      webAclId: webAclArn,
-      defaultBehavior: {
-        origin: new origins.HttpOrigin(nlb.loadBalancerDnsName, {
-          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          httpPort: 80,
-          customHeaders: {
-            'X-Custom-Secret': cloudfrontSecret.secretValue.unsafeUnwrap(),
-          },
-        }),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
-        ...(edgeLambdas ? { edgeLambdas } : {}),
-      },
-      comment: 'CC-on-Bedrock Dev Environment',
-      ...(devEnvCertificateArn ? {
-        domainNames: [`*.${config.devSubdomain}.${config.domainName}`],
-        certificate: acm.Certificate.fromCertificateArn(this, 'DevEnvCfCert', devEnvCertificateArn),
-      } : {}),
-    });
-
-    // Route 53 Wildcard Record
-    new route53.ARecord(this, 'DevEnvWildcard', {
-      zone: hostedZone,
-      recordName: `*.${config.devSubdomain}`,
-      target: route53.RecordTarget.fromAlias(new route53targets.CloudFrontTarget(distribution)),
-    });
-
     // ============================================================
     // NLB + Nginx Dynamic Routing (Enterprise - unlimited users)
     // Replaces ALB listener rules (100 rule limit) with Nginx
@@ -496,7 +380,6 @@ export class EcsDevenvStack extends cdk.Stack {
 
     // Outputs
     new cdk.CfnOutput(this, 'ClusterName', { value: this.cluster.clusterName, exportName: 'cc-ecs-cluster-name' });
-    new cdk.CfnOutput(this, 'CloudFrontDomain', { value: distribution.distributionDomainName, exportName: 'cc-devenv-cf-domain' });
     new cdk.CfnOutput(this, 'SgOpen', { value: sgOpen.securityGroupId, exportName: 'cc-sg-devenv-open' });
     new cdk.CfnOutput(this, 'SgRestricted', { value: sgRestricted.securityGroupId, exportName: 'cc-sg-devenv-restricted' });
     new cdk.CfnOutput(this, 'SgLocked', { value: sgLocked.securityGroupId, exportName: 'cc-sg-devenv-locked' });
