@@ -3,35 +3,54 @@ set -euo pipefail
 
 # CC-on-Bedrock AMI Builder
 # Launches a temporary EC2 instance, runs setup scripts, creates AMI, terminates instance.
-# Must run from an environment with AWS credentials and VPC access.
 #
-# Usage: ./build-ami.sh [instance-type] [volume-size-gb]
-# Example: ./build-ami.sh t4g.medium 30
+# Usage: ./build-ami.sh <os-type> [instance-type] [volume-size-gb]
+# Example: ./build-ami.sh ubuntu t4g.medium 30
+#          ./build-ami.sh al2023
 
-INSTANCE_TYPE="${1:-t4g.medium}"
-VOLUME_SIZE="${2:-30}"
+OS_TYPE="${1:-ubuntu}"
+INSTANCE_TYPE="${2:-t4g.medium}"
+VOLUME_SIZE="${3:-30}"
 REGION="${AWS_REGION:-ap-northeast-2}"
-AMI_NAME="cc-on-bedrock-devenv-$(date +%Y%m%d-%H%M%S)"
+AMI_NAME="cc-on-bedrock-devenv-${OS_TYPE}-$(date +%Y%m%d-%H%M%S)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+if [ "$OS_TYPE" != "ubuntu" ] && [ "$OS_TYPE" != "al2023" ]; then
+  echo "ERROR: OS type must be 'ubuntu' or 'al2023'"
+  exit 1
+fi
+
 echo "=== CC-on-Bedrock AMI Builder ==="
+echo "OS type: $OS_TYPE"
 echo "Instance type: $INSTANCE_TYPE"
 echo "Volume size: ${VOLUME_SIZE}GB"
 echo "Region: $REGION"
 
-# Find latest Ubuntu 24.04 ARM64 AMI
+# Find base AMI based on OS type
 echo "Finding base AMI..."
-BASE_AMI=$(aws ec2 describe-images \
-  --owners 099720109477 \
-  --filters \
-    "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*" \
-    "Name=architecture,Values=arm64" \
-    "Name=state,Values=available" \
-  --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
-  --output text \
-  --region "$REGION")
-echo "Base AMI: $BASE_AMI"
+if [ "$OS_TYPE" = "ubuntu" ]; then
+  BASE_AMI=$(aws ec2 describe-images \
+    --owners 099720109477 \
+    --filters \
+      "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*" \
+      "Name=architecture,Values=arm64" \
+      "Name=state,Values=available" \
+    --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+    --output text \
+    --region "$REGION")
+else
+  BASE_AMI=$(aws ec2 describe-images \
+    --owners amazon \
+    --filters \
+      "Name=name,Values=al2023-ami-2023.*-kernel-*-arm64" \
+      "Name=architecture,Values=arm64" \
+      "Name=state,Values=available" \
+    --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+    --output text \
+    --region "$REGION")
+fi
+echo "Base AMI: $BASE_AMI ($OS_TYPE)"
 
 # Find a private subnet
 SUBNET_ID=$(aws ec2 describe-subnets \
@@ -82,7 +101,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --security-group-ids "$SG_ID" \
   --iam-instance-profile Name="$INSTANCE_PROFILE" \
   --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"VolumeSize\":$VOLUME_SIZE,\"VolumeType\":\"gp3\",\"Encrypted\":true}}]" \
-  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cc-ami-builder},{Key=managed_by,Value=cc-on-bedrock}]" \
+  --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=cc-ami-builder-${OS_TYPE}},{Key=managed_by,Value=cc-on-bedrock}]" \
   --metadata-options "HttpTokens=required,HttpPutResponseHopLimit=2" \
   --query 'Instances[0].InstanceId' \
   --output text \
@@ -118,7 +137,6 @@ run_script() {
   local script_name=$(basename "$script_path")
   echo "Running $script_name..."
 
-  # Read script content, wrap in bash + prepend environment for SSM (which uses /bin/sh)
   local script_content
   script_content="#!/bin/bash
 export HOME=/root
@@ -134,7 +152,6 @@ $(cat "$script_path")"
     --output text \
     --region "$REGION")
 
-  # Wait for completion
   aws ssm wait command-executed \
     --command-id "$COMMAND_ID" \
     --instance-id "$INSTANCE_ID" \
@@ -165,21 +182,66 @@ run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-common.sh"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-claude-code.sh"
 run_script "$PROJECT_ROOT/docker/devenv/scripts/setup-kiro.sh"
 
-# Install SSM agent + CloudWatch agent + code-server systemd service
-echo "Running EC2-specific setup..."
+# OS-specific EC2 setup (SSM agent, CWAgent, code-server, hibernation)
+echo "Running EC2-specific setup ($OS_TYPE)..."
+
+if [ "$OS_TYPE" = "ubuntu" ]; then
+  # Ubuntu: snap SSM → deb SSM, apt-based installs
+  COMMAND_ID=$(aws ssm send-command \
+    --instance-ids "$INSTANCE_ID" \
+    --document-name "AWS-RunShellScript" \
+    --parameters 'commands=[
+      "# Replace snap SSM agent with deb version (ADR-010: snap SSM fails to reconnect after hibernate)",
+      "snap stop amazon-ssm-agent 2>/dev/null || true",
+      "snap remove amazon-ssm-agent 2>/dev/null || true",
+      "wget -q https://s3.ap-northeast-2.amazonaws.com/amazon-ssm-ap-northeast-2/latest/debian_arm64/amazon-ssm-agent.deb -O /tmp/ssm.deb",
+      "dpkg -i /tmp/ssm.deb && rm /tmp/ssm.deb",
+      "systemctl enable amazon-ssm-agent",
+      "# Install CloudWatch Agent",
+      "wget -q https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/cw-agent.deb",
+      "dpkg -i /tmp/cw-agent.deb && rm /tmp/cw-agent.deb",
+      "# Remove PEP 668 restriction",
+      "rm -f /usr/lib/python3*/EXTERNALLY-MANAGED",
+      "# EC2 Hibernation agent (ADR-010)",
+      "apt-get update -qq && apt-get install -y ec2-hibinit-agent",
+      "echo GRUB_CMDLINE_LINUX_DEFAULT=\\\"nokaslr\\\" > /etc/default/grub.d/99-hibernation.cfg",
+      "update-grub",
+      "# Cleanup",
+      "apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*"
+    ]' \
+    --timeout-seconds 300 \
+    --query 'Command.CommandId' \
+    --output text \
+    --region "$REGION")
+else
+  # AL2023: dnf-based installs, SSM already included
+  COMMAND_ID=$(aws ssm send-command \
+    --instance-ids "$INSTANCE_ID" \
+    --document-name "AWS-RunShellScript" \
+    --parameters 'commands=[
+      "# SSM agent is pre-installed on AL2023",
+      "systemctl enable amazon-ssm-agent",
+      "# Install CloudWatch Agent",
+      "dnf install -y amazon-cloudwatch-agent",
+      "# EC2 Hibernation agent",
+      "dnf install -y ec2-hibinit-agent",
+      "# Cleanup",
+      "dnf clean all && rm -rf /tmp/*"
+    ]' \
+    --timeout-seconds 300 \
+    --query 'Command.CommandId' \
+    --output text \
+    --region "$REGION")
+fi
+
+aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
+
+# Common EC2 setup: CWAgent config, code-server service, hibernate resume
+echo "Running common EC2 setup..."
 COMMAND_ID=$(aws ssm send-command \
   --instance-ids "$INSTANCE_ID" \
   --document-name "AWS-RunShellScript" \
   --parameters 'commands=[
-    "# Replace snap SSM agent with deb version (ADR-010: snap SSM fails to reconnect after hibernate)",
-    "snap stop amazon-ssm-agent 2>/dev/null || true",
-    "snap remove amazon-ssm-agent 2>/dev/null || true",
-    "wget -q https://s3.ap-northeast-2.amazonaws.com/amazon-ssm-ap-northeast-2/latest/debian_arm64/amazon-ssm-agent.deb -O /tmp/ssm.deb",
-    "dpkg -i /tmp/ssm.deb && rm /tmp/ssm.deb",
-    "systemctl enable amazon-ssm-agent",
-    "# Install CloudWatch Agent",
-    "wget -q https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb -O /tmp/cw-agent.deb",
-    "dpkg -i /tmp/cw-agent.deb && rm /tmp/cw-agent.deb",
     "# Configure CloudWatch Agent for memory and disk metrics",
     "mkdir -p /opt/aws/amazon-cloudwatch-agent/etc",
     "cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << CWCFG",
@@ -203,8 +265,6 @@ COMMAND_ID=$(aws ssm send-command \
     "}",
     "CWCFG",
     "systemctl enable amazon-cloudwatch-agent",
-    "# Remove PEP 668 restriction",
-    "rm -f /usr/lib/python3*/EXTERNALLY-MANAGED",
     "# code-server systemd service",
     "cat > /etc/systemd/system/code-server.service << EOF",
     "[Unit]",
@@ -223,7 +283,7 @@ COMMAND_ID=$(aws ssm send-command \
     "WantedBy=multi-user.target",
     "EOF",
     "systemctl daemon-reload",
-    "# Pre-create code-server config with 0.0.0.0 binding",
+    "# Pre-create code-server config",
     "sudo -u coder mkdir -p /home/coder/.config/code-server /home/coder/workspace",
     "cat > /home/coder/.config/code-server/config.yaml << CSCFG",
     "bind-addr: 0.0.0.0:8080",
@@ -233,11 +293,7 @@ COMMAND_ID=$(aws ssm send-command \
     "CSCFG",
     "chown -R coder:coder /home/coder/.config /home/coder/workspace",
     "systemctl enable code-server",
-    "# EC2 Hibernation agent (ADR-010)",
-    "apt-get update -qq && apt-get install -y ec2-hibinit-agent",
-    "echo GRUB_CMDLINE_LINUX_DEFAULT=\\\"nokaslr\\\" > /etc/default/grub.d/99-hibernation.cfg",
-    "update-grub",
-    "# ADR-010: Restart agents after hibernate resume (SSM/CW lose connections during hibernate)",
+    "# ADR-010: Restart agents after hibernate resume",
     "cat > /etc/systemd/system/hibernate-resume-agents.service << HRSVC",
     "[Unit]",
     "Description=Restart SSM, CloudWatch, code-server agents after hibernate resume",
@@ -252,9 +308,7 @@ COMMAND_ID=$(aws ssm send-command \
     "HRSVC",
     "systemctl daemon-reload",
     "systemctl enable hibernate-resume-agents.service",
-    "# Cleanup",
-    "apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*",
-    "echo AMI setup complete"
+    "echo Common EC2 setup complete"
   ]' \
   --timeout-seconds 300 \
   --query 'Command.CommandId' \
@@ -273,8 +327,8 @@ echo "Creating AMI: $AMI_NAME..."
 AMI_ID=$(aws ec2 create-image \
   --instance-id "$INSTANCE_ID" \
   --name "$AMI_NAME" \
-  --description "CC-on-Bedrock DevEnv: Ubuntu 24.04 ARM64 + code-server + Claude Code + Kiro" \
-  --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$AMI_NAME},{Key=managed_by,Value=cc-on-bedrock}]" \
+  --description "CC-on-Bedrock DevEnv: ${OS_TYPE} ARM64 + code-server + Claude Code + Kiro" \
+  --tag-specifications "ResourceType=image,Tags=[{Key=Name,Value=$AMI_NAME},{Key=managed_by,Value=cc-on-bedrock},{Key=os_type,Value=$OS_TYPE}]" \
   --query 'ImageId' \
   --output text \
   --region "$REGION")
@@ -283,20 +337,32 @@ echo "AMI ID: $AMI_ID"
 echo "Waiting for AMI to be available..."
 aws ec2 wait image-available --image-ids "$AMI_ID" --region "$REGION"
 
-# Store AMI ID in SSM Parameter Store
+# Store AMI ID in SSM Parameter Store (per-OS + legacy fallback)
 aws ssm put-parameter \
-  --name "/cc-on-bedrock/devenv/ami-id" \
+  --name "/cc-on-bedrock/devenv/ami-id/${OS_TYPE}" \
   --value "$AMI_ID" \
   --type String \
   --overwrite \
   --region "$REGION"
-echo "AMI ID stored in SSM: /cc-on-bedrock/devenv/ami-id"
+echo "AMI ID stored in SSM: /cc-on-bedrock/devenv/ami-id/${OS_TYPE}"
+
+# Also update legacy parameter if ubuntu (backwards compatibility)
+if [ "$OS_TYPE" = "ubuntu" ]; then
+  aws ssm put-parameter \
+    --name "/cc-on-bedrock/devenv/ami-id" \
+    --value "$AMI_ID" \
+    --type String \
+    --overwrite \
+    --region "$REGION"
+  echo "Legacy parameter updated: /cc-on-bedrock/devenv/ami-id"
+fi
 
 # Terminate build instance
 echo "Terminating build instance..."
 aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION"
 
 echo "=== AMI Build Complete ==="
+echo "OS type: $OS_TYPE"
 echo "AMI ID: $AMI_ID"
 echo "AMI Name: $AMI_NAME"
-echo "SSM Parameter: /cc-on-bedrock/devenv/ami-id"
+echo "SSM Parameter: /cc-on-bedrock/devenv/ami-id/${OS_TYPE}"
