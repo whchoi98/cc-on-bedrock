@@ -1,7 +1,7 @@
 # ADR-012: DevEnv Cognito Authentication via Lambda@Edge
 
 ## Status
-Accepted
+Superseded by [ADR-013](ADR-013-unified-cloudfront-auth.md) (2026-04-16)
 
 ## Context
 The `*.dev.atomai.click` DevEnv path had no user authentication at the CloudFront or Nginx layer. Anyone who knew a valid subdomain could reach that user's code-server login page. While code-server has built-in password auth, this exposed the login surface to the internet without identity verification.

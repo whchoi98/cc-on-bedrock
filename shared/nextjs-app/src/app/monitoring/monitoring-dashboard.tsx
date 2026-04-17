@@ -50,21 +50,27 @@ interface InstanceMetricsRow {
 }
 
 interface BedrockMetricsSnapshot {
-  inputTokensPerMin: number;
-  outputTokensPerMin: number;
-  totalTokensPerMin: number;
-  invocationsPerMin: number;
+  inputTokensToday: number;
+  outputTokensToday: number;
+  totalTokensToday: number;
+  invocationsToday: number;
   avgLatencyMs: number;
-  estimatedCostPerMin: number;
+  estimatedCostToday: number;
+  tokensPerHour: number;
+  costPerHour: number;
+  hoursElapsed: number;
 }
 
-interface BedrockTsData {
-  timestamps: string[];
-  inputTokens: number[];
-  outputTokens: number[];
-  invocations: number[];
-  estimatedCost: number[];
+interface BedrockTsPoint {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  invocations: number;
+  estimatedCost: number;
 }
+
+type BedrockTsData = BedrockTsPoint[];
 
 // EC2 on-demand pricing (ap-northeast-2, Seoul)
 const EC2_PRICING: Record<string, number> = {
@@ -179,11 +185,11 @@ export default function MonitoringDashboard({
         console.error("EC2 metrics fetch failed:", ec2Err);
       }
 
-      // Bedrock Usage metrics
+      // Bedrock Usage metrics (DynamoDB — cc-on-bedrock project only)
       try {
         const [brRes, brTsRes] = await Promise.all([
           fetch("/api/container-metrics?action=bedrock"),
-          fetch("/api/container-metrics?action=bedrock_timeseries&hours=6"),
+          fetch("/api/container-metrics?action=bedrock_timeseries&days=7"),
         ]);
         if (brRes.ok) {
           const brJson = (await brRes.json()) as ApiResponse<BedrockMetricsSnapshot>;
@@ -375,23 +381,25 @@ export default function MonitoringDashboard({
       <section>
         <h2 className="text-lg font-semibold text-gray-100 mb-4">Bedrock Usage</h2>
 
-        {/* Stat Cards */}
+        {/* Stat Cards — DynamoDB-based, cc-on-bedrock project only */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
           <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Tokens / min</p>
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Tokens Today</p>
             <p className="text-2xl font-bold text-emerald-400">
-              {bedrockMetrics ? formatNumber(bedrockMetrics.totalTokensPerMin) : "-"}
+              {bedrockMetrics ? formatNumber(bedrockMetrics.totalTokensToday) : "-"}
             </p>
             <p className="text-[10px] text-gray-600 mt-0.5">
-              {bedrockMetrics ? `In ${formatNumber(bedrockMetrics.inputTokensPerMin)} · Out ${formatNumber(bedrockMetrics.outputTokensPerMin)}` : "No data"}
+              {bedrockMetrics ? `In ${formatNumber(bedrockMetrics.inputTokensToday)} · Out ${formatNumber(bedrockMetrics.outputTokensToday)}` : "No data"}
             </p>
           </div>
           <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Invocations / min</p>
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Invocations Today</p>
             <p className="text-2xl font-bold text-blue-400">
-              {bedrockMetrics ? bedrockMetrics.invocationsPerMin.toFixed(1) : "-"}
+              {bedrockMetrics ? formatNumber(bedrockMetrics.invocationsToday) : "-"}
             </p>
-            <p className="text-[10px] text-gray-600 mt-0.5">Bedrock API calls</p>
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              {bedrockMetrics ? `~${(bedrockMetrics.invocationsToday / Math.max(bedrockMetrics.hoursElapsed, 0.1)).toFixed(0)}/hr avg` : "Bedrock API calls"}
+            </p>
           </div>
           <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
             <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Avg Latency</p>
@@ -401,11 +409,13 @@ export default function MonitoringDashboard({
             <p className="text-[10px] text-gray-600 mt-0.5">Response time</p>
           </div>
           <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Bedrock Cost / hr</p>
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Bedrock Cost Today</p>
             <p className="text-2xl font-bold text-rose-400">
-              {bedrockMetrics ? `$${(bedrockMetrics.estimatedCostPerMin * 60).toFixed(2)}` : "-"}
+              {bedrockMetrics ? `$${bedrockMetrics.estimatedCostToday.toFixed(2)}` : "-"}
             </p>
-            <p className="text-[10px] text-gray-600 mt-0.5">Token usage cost</p>
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              {bedrockMetrics ? `~$${bedrockMetrics.costPerHour.toFixed(2)}/hr avg` : "Token usage cost"}
+            </p>
           </div>
         </div>
 
@@ -414,7 +424,7 @@ export default function MonitoringDashboard({
           const devCount = ec2Metrics?.instanceCount ?? 0;
           const devCostHr = devCount * (EC2_PRICING[CLUSTER_INSTANCE_TYPE] ?? 0);
           const dashCostHr = EC2_PRICING[DASHBOARD_INSTANCE_TYPE] ?? 0;
-          const bedrockCostHr = (bedrockMetrics?.estimatedCostPerMin ?? 0) * 60;
+          const bedrockCostHr = bedrockMetrics?.costPerHour ?? 0;
           const totalCostHr = bedrockCostHr + devCostHr + dashCostHr;
           return (
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4">
@@ -458,31 +468,31 @@ export default function MonitoringDashboard({
           );
         })()}
 
-        {/* Time Series Charts */}
-        {bedrockTimeSeries && bedrockTimeSeries.timestamps.length > 0 && (
+        {/* Time Series Charts — daily from DynamoDB */}
+        {bedrockTimeSeries && bedrockTimeSeries.length > 0 && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <AreaTrendChart
-              data={bedrockTimeSeries.timestamps.map((ts, i) => ({
-                date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-                input: bedrockTimeSeries.inputTokens[i] ?? 0,
-                output: bedrockTimeSeries.outputTokens[i] ?? 0,
+              data={bedrockTimeSeries.map((d) => ({
+                date: d.date.slice(5), // MM-DD
+                input: d.inputTokens,
+                output: d.outputTokens,
               }))}
               series={[
-                { key: "input", name: "Input Tokens/min", color: "#34d399" },
-                { key: "output", name: "Output Tokens/min", color: "#f472b6" },
+                { key: "input", name: "Input Tokens", color: "#34d399" },
+                { key: "output", name: "Output Tokens", color: "#f472b6" },
               ]}
-              title="Token Throughput (Last 6h)"
+              title="Daily Token Usage (Last 7 days)"
               height={220}
             />
             <AreaTrendChart
-              data={bedrockTimeSeries.timestamps.map((ts, i) => ({
-                date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-                cost: (bedrockTimeSeries.estimatedCost[i] ?? 0) * 60,
+              data={bedrockTimeSeries.map((d) => ({
+                date: d.date.slice(5), // MM-DD
+                cost: d.estimatedCost,
               }))}
               series={[
-                { key: "cost", name: "Bedrock Cost $/hr", color: "#fb7185" },
+                { key: "cost", name: "Daily Cost ($)", color: "#fb7185" },
               ]}
-              title="Bedrock Cost Trend (Last 6h)"
+              title="Daily Bedrock Cost (Last 7 days)"
               height={220}
             />
           </div>

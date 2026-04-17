@@ -288,6 +288,103 @@ export async function getDailyUsage(params?: {
   return Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+// ─── Bedrock Usage Snapshot (for Monitoring page) ───
+
+export interface BedrockUsageSnapshot {
+  /** Today's input tokens (cc-on-bedrock only) */
+  inputTokensToday: number;
+  /** Today's output tokens */
+  outputTokensToday: number;
+  /** Today's total tokens */
+  totalTokensToday: number;
+  /** Today's total API invocations */
+  invocationsToday: number;
+  /** Average latency in ms (today, from DynamoDB latencySumMs / requests) */
+  avgLatencyMs: number;
+  /** Today's estimated cost in USD */
+  estimatedCostToday: number;
+  /** Average tokens per hour (totalTokens / hours elapsed today) */
+  tokensPerHour: number;
+  /** Average cost per hour */
+  costPerHour: number;
+  /** Hours elapsed today (for rate computation) */
+  hoursElapsed: number;
+}
+
+export interface BedrockUsageTimeSeriesPoint {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  invocations: number;
+  estimatedCost: number;
+}
+
+/**
+ * Get today's Bedrock usage from DynamoDB (cc-on-bedrock project only).
+ * Unlike CloudWatch AWS/Bedrock metrics, this only includes invocations
+ * made through cc-on-bedrock IAM roles (cc-on-bedrock-task-* prefix).
+ */
+export async function getBedrockUsageSnapshot(): Promise<BedrockUsageSnapshot> {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const records = await getUsageRecords({ startDate: today, endDate: today });
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let requests = 0;
+  let cost = 0;
+  let latencySum = 0;
+
+  for (const r of records) {
+    inputTokens += r.inputTokens;
+    outputTokens += r.outputTokens;
+    totalTokens += r.totalTokens;
+    requests += r.requests;
+    cost += r.estimatedCost;
+    latencySum += r.latencySumMs;
+  }
+
+  // Hours elapsed since midnight UTC
+  const now = new Date();
+  const midnight = new Date(now);
+  midnight.setUTCHours(0, 0, 0, 0);
+  const hoursElapsed = Math.max((now.getTime() - midnight.getTime()) / 3_600_000, 0.1);
+
+  return {
+    inputTokensToday: inputTokens,
+    outputTokensToday: outputTokens,
+    totalTokensToday: totalTokens,
+    invocationsToday: requests,
+    avgLatencyMs: requests > 0 ? Math.round(latencySum / requests) : 0,
+    estimatedCostToday: cost,
+    tokensPerHour: totalTokens / hoursElapsed,
+    costPerHour: cost / hoursElapsed,
+    hoursElapsed: Math.round(hoursElapsed * 10) / 10,
+  };
+}
+
+/**
+ * Get daily Bedrock usage time series from DynamoDB (cc-on-bedrock project only).
+ */
+export async function getBedrockUsageTimeSeries(
+  days: number = 7,
+): Promise<BedrockUsageTimeSeriesPoint[]> {
+  const endDate = new Date().toISOString().slice(0, 10);
+  const startDate = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+
+  const daily = await getDailyUsage({ startDate, endDate });
+
+  return daily.map((d) => ({
+    date: d.date,
+    inputTokens: d.inputTokens,
+    outputTokens: d.outputTokens,
+    totalTokens: d.totalTokens,
+    invocations: d.requests,
+    estimatedCost: d.estimatedCost,
+  }));
+}
+
 // ─── Total Spend ───
 
 export async function getTotalUsage(): Promise<{
