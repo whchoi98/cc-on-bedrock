@@ -322,55 +322,6 @@ COMMAND_ID=$(aws ssm send-command \
 
 aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
 
-# MCP config sync: upload script + install systemd service
-echo "Installing MCP config sync service..."
-
-# Create a temp installer script that embeds sync-mcp-config.sh
-INSTALLER=$(mktemp)
-cat > "$INSTALLER" << 'INSTALLER_HEAD'
-#!/bin/bash
-mkdir -p /opt/cc-on-bedrock
-INSTALLER_HEAD
-echo "cat > /opt/cc-on-bedrock/sync-mcp-config.sh << 'SYNCEOF'" >> "$INSTALLER"
-cat "$PROJECT_ROOT/docker/devenv/scripts/sync-mcp-config.sh" >> "$INSTALLER"
-echo "SYNCEOF" >> "$INSTALLER"
-echo "chmod +x /opt/cc-on-bedrock/sync-mcp-config.sh" >> "$INSTALLER"
-run_script "$INSTALLER"
-rm -f "$INSTALLER"
-
-COMMAND_ID=$(aws ssm send-command \
-  --instance-ids "$INSTANCE_ID" \
-  --document-name "AWS-RunShellScript" \
-  --parameters 'commands=[
-    "# Install systemd service for MCP config sync on boot",
-    "cat > /etc/systemd/system/cc-mcp-sync.service << MCPSVC",
-    "[Unit]",
-    "Description=CC-on-Bedrock MCP Config Sync",
-    "After=network-online.target",
-    "Wants=network-online.target",
-    "",
-    "[Service]",
-    "Type=oneshot",
-    "ExecStart=/opt/cc-on-bedrock/sync-mcp-config.sh",
-    "User=root",
-    "RemainAfterExit=yes",
-    "StandardOutput=journal",
-    "StandardError=journal",
-    "",
-    "[Install]",
-    "WantedBy=multi-user.target",
-    "MCPSVC",
-    "systemctl daemon-reload",
-    "systemctl enable cc-mcp-sync.service",
-    "echo MCP sync service installed"
-  ]' \
-  --timeout-seconds 60 \
-  --query 'Command.CommandId' \
-  --output text \
-  --region "$REGION")
-
-aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" --region "$REGION" 2>/dev/null || true
-
 # Stop instance before creating AMI (clean state)
 echo "Stopping instance for AMI creation..."
 aws ec2 stop-instances --instance-ids "$INSTANCE_ID" --region "$REGION"
