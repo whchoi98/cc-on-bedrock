@@ -18,6 +18,13 @@ interface McpAssignment {
   category: string;
   enabled: boolean;
 }
+
+interface MarketplaceInfo {
+  id: string;
+  name: string;
+  url: string;
+  scope: string;
+}
 import DeptSelector from "@/components/dept/dept-selector";
 import DeptCard from "@/components/dept/dept-card";
 import StatCard from "@/components/cards/stat-card";
@@ -55,6 +62,7 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [mcpAssignments, setMcpAssignments] = useState<McpAssignment[]>([]);
   const [mcpGatewayStatus, setMcpGatewayStatus] = useState<string>("unknown");
+  const [marketplaces, setMarketplaces] = useState<MarketplaceInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +124,24 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
         } catch {
           setMcpAssignments([]);
           setMcpGatewayStatus("unknown");
+        }
+        try {
+          const [commonRes, deptRes] = await Promise.all([
+            fetch("/api/admin/mcp/marketplaces?scope=common"),
+            fetch(`/api/admin/mcp/marketplaces?scope=${selectedDepartment}`),
+          ]);
+          const mkts: MarketplaceInfo[] = [];
+          if (commonRes.ok) {
+            const d = await commonRes.json();
+            (d.data ?? []).forEach((m: MarketplaceInfo) => mkts.push({ ...m, scope: "common" }));
+          }
+          if (deptRes.ok) {
+            const d = await deptRes.json();
+            (d.data ?? []).forEach((m: MarketplaceInfo) => mkts.push({ ...m, scope: selectedDepartment }));
+          }
+          setMarketplaces(mkts);
+        } catch {
+          setMarketplaces([]);
         }
       }
     } catch (err) {
@@ -431,6 +457,24 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
               </div>
             ) : (
               <p className="text-sm text-gray-500">No MCP tools assigned to this department</p>
+            )}
+
+            {marketplaces.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-800">
+                <h3 className="text-sm font-medium text-gray-300 mb-2">Plugin Marketplaces</h3>
+                <div className="space-y-1.5">
+                  {marketplaces.map((m) => (
+                    <div key={`${m.scope}-${m.id}`} className="flex items-center gap-2 text-xs">
+                      <span className={`px-1.5 py-0.5 rounded ${
+                        m.scope === "common" ? "bg-blue-500/20 text-blue-400" : "bg-purple-500/20 text-purple-400"
+                      }`}>
+                        {m.scope === "common" ? "Common" : m.scope}
+                      </span>
+                      <span className="text-gray-300">{m.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 

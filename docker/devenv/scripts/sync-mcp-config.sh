@@ -115,6 +115,40 @@ chown coder:coder "$MCP_CONFIG"
 chmod 644 "$MCP_CONFIG"
 
 log "MCP config written to ${MCP_CONFIG}"
+
+# ─── Plugin Marketplace Sync ───
+# Query common + department marketplaces from DynamoDB and register via Claude CLI
+CLAUDE_BIN=$(command -v claude 2>/dev/null || echo "")
+if [ -n "$CLAUDE_BIN" ]; then
+  COMMON_MKT=$(aws dynamodb query \
+    --table-name cc-dept-mcp-config \
+    --key-condition-expression "PK = :pk AND begins_with(SK, :sk)" \
+    --expression-attribute-values '{":pk":{"S":"COMMON"},":sk":{"S":"MKTPLACE#"}}' \
+    --projection-expression "#u,enabled" \
+    --expression-attribute-names '{"#u":"url"}' \
+    --region "$REGION" --output json 2>/dev/null || echo '{"Items":[]}')
+
+  DEPT_MKT=$(aws dynamodb query \
+    --table-name cc-dept-mcp-config \
+    --key-condition-expression "PK = :pk AND begins_with(SK, :sk)" \
+    --expression-attribute-values '{":pk":{"S":"DEPT#'"${DEPT}"'"},":sk":{"S":"MKTPLACE#"}}' \
+    --projection-expression "#u,enabled" \
+    --expression-attribute-names '{"#u":"url"}' \
+    --region "$REGION" --output json 2>/dev/null || echo '{"Items":[]}')
+
+  MKT_URLS=$(echo "$COMMON_MKT" "$DEPT_MKT" | jq -r '.Items[] | select(.enabled.BOOL==true) | .url.S' 2>/dev/null || true)
+
+  for URL in $MKT_URLS; do
+    sudo -u coder "$CLAUDE_BIN" /plugin marketplace add "$URL" 2>/dev/null && \
+      log "Added marketplace: $URL" || \
+      log "WARN: Failed to add marketplace: $URL"
+  done
+
+  [ -z "$MKT_URLS" ] && log "No plugin marketplaces configured"
+else
+  log "WARN: claude CLI not found, skipping plugin marketplace sync"
+fi
+
 exit 0
 
 # Fallback function — local MCPs only
