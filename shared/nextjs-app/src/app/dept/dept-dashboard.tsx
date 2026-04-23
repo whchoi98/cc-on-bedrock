@@ -112,35 +112,19 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
           }
         }
       }
-      // Fetch MCP assignments for the selected department
+      // Fetch MCP assignments + marketplaces for the selected department
       if (selectedDepartment && selectedDepartment !== "all") {
         try {
-          const mcpRes = await fetch(`/api/admin/mcp/assignments?department=${selectedDepartment}`);
+          const mcpRes = await fetch(`/api/dept/mcp?department=${selectedDepartment}`);
           if (mcpRes.ok) {
             const mcpData = await mcpRes.json();
             setMcpAssignments(mcpData.data?.assignments ?? []);
             setMcpGatewayStatus(mcpData.data?.gatewayStatus ?? "none");
+            setMarketplaces(mcpData.data?.marketplaces ?? []);
           }
         } catch {
           setMcpAssignments([]);
           setMcpGatewayStatus("unknown");
-        }
-        try {
-          const [commonRes, deptRes] = await Promise.all([
-            fetch("/api/admin/mcp/marketplaces?scope=common"),
-            fetch(`/api/admin/mcp/marketplaces?scope=${selectedDepartment}`),
-          ]);
-          const mkts: MarketplaceInfo[] = [];
-          if (commonRes.ok) {
-            const d = await commonRes.json();
-            (d.data ?? []).forEach((m: MarketplaceInfo) => mkts.push({ ...m, scope: "common" }));
-          }
-          if (deptRes.ok) {
-            const d = await deptRes.json();
-            (d.data ?? []).forEach((m: MarketplaceInfo) => mkts.push({ ...m, scope: selectedDepartment }));
-          }
-          setMarketplaces(mkts);
-        } catch {
           setMarketplaces([]);
         }
       }

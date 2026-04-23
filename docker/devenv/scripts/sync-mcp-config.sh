@@ -14,9 +14,35 @@ log() { logger -t "$LOG_TAG" "$@"; echo "[$LOG_TAG] $*"; }
 CODER_HOME="/home/coder"
 CLAUDE_DIR="${CODER_HOME}/.claude"
 MCP_CONFIG="${CLAUDE_DIR}/mcp_servers.json"
+DEFAULT_REGION="ap-northeast-2"
 
 # Ensure .claude directory exists
 mkdir -p "$CLAUDE_DIR"
+
+write_fallback_config() {
+  local region="${REGION:-$DEFAULT_REGION}"
+  cat > "$MCP_CONFIG" << MCPEOF
+{
+  "awslabs-core-mcp-server": {
+    "command": "uvx",
+    "args": ["awslabs.core-mcp-server@latest"],
+    "env": {
+      "AWS_REGION": "${region}"
+    }
+  },
+  "bedrock-agentcore-mcp-server": {
+    "command": "uvx",
+    "args": ["bedrock-agentcore-mcp-server@latest"],
+    "env": {
+      "AWS_REGION": "${region}"
+    }
+  }
+}
+MCPEOF
+  chown coder:coder "$MCP_CONFIG" 2>/dev/null || true
+  chmod 644 "$MCP_CONFIG" 2>/dev/null || true
+  log "Fallback MCP config written (region=${region})"
+}
 
 # Get instance metadata
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true)
@@ -26,7 +52,7 @@ if [ -n "$TOKEN" ]; then
 fi
 
 INSTANCE_ID=$(curl -s $META_HEADER http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
-REGION=$(curl -s $META_HEADER http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "ap-northeast-2")
+REGION=$(curl -s $META_HEADER http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "$DEFAULT_REGION")
 
 if [ -z "$INSTANCE_ID" ]; then
   log "ERROR: Could not get instance ID from metadata. Using fallback config."
@@ -150,28 +176,3 @@ else
 fi
 
 exit 0
-
-# Fallback function — local MCPs only
-write_fallback_config() {
-  cat > "$MCP_CONFIG" << 'MCPEOF'
-{
-  "awslabs-core-mcp-server": {
-    "command": "uvx",
-    "args": ["awslabs.core-mcp-server@latest"],
-    "env": {
-      "AWS_REGION": "ap-northeast-2"
-    }
-  },
-  "bedrock-agentcore-mcp-server": {
-    "command": "uvx",
-    "args": ["bedrock-agentcore-mcp-server@latest"],
-    "env": {
-      "AWS_REGION": "ap-northeast-2"
-    }
-  }
-}
-MCPEOF
-  chown coder:coder "$MCP_CONFIG" 2>/dev/null || true
-  chmod 644 "$MCP_CONFIG" 2>/dev/null || true
-  log "Fallback MCP config written"
-}
