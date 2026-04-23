@@ -1177,7 +1177,7 @@ async function applyGatewayPolicy(roleName: string, department: string): Promise
     // Common gateway
     const commonResult = await docClient.send(new GetCommand({
       TableName: "cc-dept-mcp-config",
-      Key: { PK: "DEPT#COMMON", SK: "GATEWAY" },
+      Key: { PK: "COMMON", SK: "GATEWAY" },
     }));
     if (commonResult.Item?.gatewayId) {
       gatewayArns.push(`arn:aws:bedrock-agentcore:${region}:${accountId}:gateway/${commonResult.Item.gatewayId}`);

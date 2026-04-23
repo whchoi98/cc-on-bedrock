@@ -36,8 +36,8 @@
 - `src/app/api/admin/dlp/domains/route.ts` - DLP 도메인 차단/허용 (Admin)
 - `src/app/api/admin/mcp/catalog/route.ts` - MCP 서버 카탈로그 CRUD (Admin)
 - `src/app/api/admin/mcp/gateways/route.ts` - MCP 게이트웨이 관리 (Admin)
-- `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 설정 동기화 (Admin)
-- `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-유저 할당 (Admin)
+- `src/app/api/admin/mcp/gateways/sync/route.ts` - MCP 게이트웨이 동기화 트리거 (Admin)
+- `src/app/api/admin/mcp/assignments/route.ts` - MCP 서버-부서 할당 (Admin, ADR-007)
 
 ### User Self-Service
 - `src/app/api/user/container/route.ts` - EC2 인스턴스 시작/중지

@@ -21,9 +21,9 @@ docs/              - Architecture docs, specs, plans, deployment guide, IaC comp
 .claude/           - Claude settings, hooks, skills
 tools/             - Scripts, prompts
 docker/            - Docker images (devenv Ubuntu/AL2023)
-cdk/               - AWS CDK TypeScript (5 active stacks)
-terraform/         - Terraform HCL (5 modules)
-cloudformation/    - CloudFormation YAML (5 templates) + deploy.sh
+cdk/               - AWS CDK TypeScript (7 stacks: network, security, usage-tracking, ecs, dashboard, waf, ec2-devenv)
+terraform/         - Terraform HCL (4 modules: network, security, ecs-devenv, dashboard)
+cloudformation/    - CloudFormation YAML (4 templates) + deploy.sh
 shared/nextjs-app/ - Next.js dashboard (analytics, monitoring, admin)
 agent/             - Agent configurations, MCP server settings
 scripts/           - ECR repos, deployment verification
