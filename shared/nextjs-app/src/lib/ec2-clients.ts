@@ -278,9 +278,13 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"diskio":{"measurement":["read_bytes","write_bytes"],"resources":["*"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
-      `# Upgrade Claude Code CLI (installs to ~/.local/bin, symlink to /usr/local/bin)`,
+      `# Upgrade Claude Code + Kiro CLI (symlink to /usr/local/bin for PATH)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
       `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
+      `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>/dev/null || true`,
+      `[ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
+      `# MCP config sync — delegate to AMI script (ADR-007 §6)`,
+      `[ -x /opt/cc-on-bedrock/sync-mcp-config.sh ] && bash /opt/cc-on-bedrock/sync-mcp-config.sh 2>/dev/null || true`,
     ].join("\n")).toString("base64"),
   }));
 
@@ -627,9 +631,13 @@ export async function restoreFromSnapshot(
       `{"agent":{"run_as_user":"root"},"metrics":{"namespace":"CWAgent","metrics_collected":{"mem":{"measurement":["mem_used_percent","mem_used","mem_total"]},"disk":{"measurement":["disk_used_percent"],"resources":["/"]},"diskio":{"measurement":["read_bytes","write_bytes"],"resources":["*"]},"net":{"measurement":["bytes_sent","bytes_recv"]}},"append_dimensions":{"InstanceId":"\${aws:InstanceId}"}}}`,
       `CWCFG`,
       `amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || true`,
-      `# Upgrade Claude Code CLI (installs to ~/.local/bin, symlink to /usr/local/bin)`,
+      `# Upgrade Claude Code + Kiro CLI (symlink to /usr/local/bin for PATH)`,
       `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>/dev/null || true`,
       `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
+      `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>/dev/null || true`,
+      `[ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
+      `# MCP config sync — delegate to AMI script (ADR-007 §6)`,
+      `[ -x /opt/cc-on-bedrock/sync-mcp-config.sh ] && bash /opt/cc-on-bedrock/sync-mcp-config.sh 2>/dev/null || true`,
     ].join("\n")).toString("base64"),
   }));
 
@@ -1084,9 +1092,11 @@ async function postStartSetup(instanceId: string): Promise<void> {
       DocumentName: "AWS-RunShellScript",
       Parameters: {
         commands: [
-          `# Upgrade Claude Code CLI (as coder user, symlink to /usr/local/bin)`,
+          `# Upgrade Claude Code + Kiro CLI (as coder user, symlink to /usr/local/bin)`,
           `sudo -u coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1 || true`,
           `[ -f /home/coder/.local/bin/claude ] && ln -sf /home/coder/.local/bin/claude /usr/local/bin/claude`,
+          `sudo -u coder bash -c 'curl -fsSL https://cli.kiro.dev/install | bash' 2>&1 || true`,
+          `[ -f /home/coder/.local/bin/kiro ] && ln -sf /home/coder/.local/bin/kiro /usr/local/bin/kiro`,
           `# Start CWAgent for memory/disk metrics`,
           `if command -v amazon-cloudwatch-agent-ctl &>/dev/null; then`,
           `  amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json 2>/dev/null || amazon-cloudwatch-agent-ctl -a start 2>/dev/null || true`,
@@ -1141,7 +1151,7 @@ async function applyGatewayPolicy(roleName: string, department: string): Promise
     // Common gateway
     const commonResult = await docClient.send(new GetCommand({
       TableName: "cc-dept-mcp-config",
-      Key: { PK: "DEPT#COMMON", SK: "GATEWAY" },
+      Key: { PK: "COMMON", SK: "GATEWAY" },
     }));
     if (commonResult.Item?.gatewayId) {
       gatewayArns.push(`arn:aws:bedrock-agentcore:${region}:${accountId}:gateway/${commonResult.Item.gatewayId}`);

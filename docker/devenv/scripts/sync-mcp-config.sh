@@ -14,9 +14,35 @@ log() { logger -t "$LOG_TAG" "$@"; echo "[$LOG_TAG] $*"; }
 CODER_HOME="/home/coder"
 CLAUDE_DIR="${CODER_HOME}/.claude"
 MCP_CONFIG="${CLAUDE_DIR}/mcp_servers.json"
+DEFAULT_REGION="ap-northeast-2"
 
 # Ensure .claude directory exists
 mkdir -p "$CLAUDE_DIR"
+
+write_fallback_config() {
+  local region="${REGION:-$DEFAULT_REGION}"
+  cat > "$MCP_CONFIG" << MCPEOF
+{
+  "awslabs-core-mcp-server": {
+    "command": "uvx",
+    "args": ["awslabs.core-mcp-server@latest"],
+    "env": {
+      "AWS_REGION": "${region}"
+    }
+  },
+  "bedrock-agentcore-mcp-server": {
+    "command": "uvx",
+    "args": ["bedrock-agentcore-mcp-server@latest"],
+    "env": {
+      "AWS_REGION": "${region}"
+    }
+  }
+}
+MCPEOF
+  chown coder:coder "$MCP_CONFIG" 2>/dev/null || true
+  chmod 644 "$MCP_CONFIG" 2>/dev/null || true
+  log "Fallback MCP config written (region=${region})"
+}
 
 # Get instance metadata
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true)
@@ -26,7 +52,7 @@ if [ -n "$TOKEN" ]; then
 fi
 
 INSTANCE_ID=$(curl -s $META_HEADER http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
-REGION=$(curl -s $META_HEADER http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "ap-northeast-2")
+REGION=$(curl -s $META_HEADER http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "$DEFAULT_REGION")
 
 if [ -z "$INSTANCE_ID" ]; then
   log "ERROR: Could not get instance ID from metadata. Using fallback config."
@@ -115,29 +141,38 @@ chown coder:coder "$MCP_CONFIG"
 chmod 644 "$MCP_CONFIG"
 
 log "MCP config written to ${MCP_CONFIG}"
-exit 0
 
-# Fallback function — local MCPs only
-write_fallback_config() {
-  cat > "$MCP_CONFIG" << 'MCPEOF'
-{
-  "awslabs-core-mcp-server": {
-    "command": "uvx",
-    "args": ["awslabs.core-mcp-server@latest"],
-    "env": {
-      "AWS_REGION": "ap-northeast-2"
-    }
-  },
-  "bedrock-agentcore-mcp-server": {
-    "command": "uvx",
-    "args": ["bedrock-agentcore-mcp-server@latest"],
-    "env": {
-      "AWS_REGION": "ap-northeast-2"
-    }
-  }
-}
-MCPEOF
-  chown coder:coder "$MCP_CONFIG" 2>/dev/null || true
-  chmod 644 "$MCP_CONFIG" 2>/dev/null || true
-  log "Fallback MCP config written"
-}
+# ─── Plugin Marketplace Sync ───
+# Query common + department marketplaces from DynamoDB and register via Claude CLI
+CLAUDE_BIN=$(command -v claude 2>/dev/null || echo "")
+if [ -n "$CLAUDE_BIN" ]; then
+  COMMON_MKT=$(aws dynamodb query \
+    --table-name cc-dept-mcp-config \
+    --key-condition-expression "PK = :pk AND begins_with(SK, :sk)" \
+    --expression-attribute-values '{":pk":{"S":"COMMON"},":sk":{"S":"MKTPLACE#"}}' \
+    --projection-expression "#u,enabled" \
+    --expression-attribute-names '{"#u":"url"}' \
+    --region "$REGION" --output json 2>/dev/null || echo '{"Items":[]}')
+
+  DEPT_MKT=$(aws dynamodb query \
+    --table-name cc-dept-mcp-config \
+    --key-condition-expression "PK = :pk AND begins_with(SK, :sk)" \
+    --expression-attribute-values '{":pk":{"S":"DEPT#'"${DEPT}"'"},":sk":{"S":"MKTPLACE#"}}' \
+    --projection-expression "#u,enabled" \
+    --expression-attribute-names '{"#u":"url"}' \
+    --region "$REGION" --output json 2>/dev/null || echo '{"Items":[]}')
+
+  MKT_URLS=$(echo "$COMMON_MKT" "$DEPT_MKT" | jq -r '.Items[] | select(.enabled.BOOL==true) | .url.S' 2>/dev/null || true)
+
+  for URL in $MKT_URLS; do
+    sudo -u coder "$CLAUDE_BIN" /plugin marketplace add "$URL" 2>/dev/null && \
+      log "Added marketplace: $URL" || \
+      log "WARN: Failed to add marketplace: $URL"
+  done
+
+  [ -z "$MKT_URLS" ] && log "No plugin marketplaces configured"
+else
+  log "WARN: claude CLI not found, skipping plugin marketplace sync"
+fi
+
+exit 0

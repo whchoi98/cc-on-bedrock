@@ -28,7 +28,17 @@ type Gateway = {
   lastSyncAt: string;
 };
 
-type Tab = "catalog" | "assignments" | "gateways";
+type Marketplace = {
+  id: string;
+  name: string;
+  url: string;
+  description: string;
+  enabled: boolean;
+  addedBy: string;
+  addedAt: string;
+};
+
+type Tab = "catalog" | "assignments" | "gateways" | "marketplaces";
 
 export default function McpManagement() {
   const [tab, setTab] = useState<Tab>("catalog");
@@ -41,6 +51,13 @@ export default function McpManagement() {
   const [editItem, setEditItem] = useState<McpItem | null>(null);
   const [form, setForm] = useState({
     mcpId: "", name: "", description: "", category: "department", lambdaArn: "", tools: "",
+  });
+  const [marketplaces, setMarketplaces] = useState<Marketplace[]>([]);
+  const [mktScope, setMktScope] = useState("common");
+  const [showMktModal, setShowMktModal] = useState(false);
+  const [editMkt, setEditMkt] = useState<Marketplace | null>(null);
+  const [mktForm, setMktForm] = useState({
+    id: "", name: "", url: "", description: "", scope: "common",
   });
 
   const fetchCatalog = useCallback(async () => {
@@ -62,10 +79,20 @@ export default function McpManagement() {
     if (data.success) setAssignments(data.data);
   }, []);
 
+  const fetchMarketplaces = useCallback(async (scope: string) => {
+    const res = await fetch(`/api/admin/mcp/marketplaces?scope=${scope}`);
+    const data = await res.json();
+    if (data.success) setMarketplaces(data.data);
+  }, []);
+
   useEffect(() => {
     fetchCatalog();
     fetchGateways();
   }, [fetchCatalog, fetchGateways]);
+
+  useEffect(() => {
+    fetchMarketplaces(mktScope);
+  }, [mktScope, fetchMarketplaces]);
 
   useEffect(() => {
     if (selectedDept) fetchAssignments(selectedDept);
@@ -115,10 +142,69 @@ export default function McpManagement() {
     setLoading(false);
   };
 
+  const openCreateMkt = () => {
+    setEditMkt(null);
+    setMktForm({ id: "", name: "", url: "", description: "", scope: mktScope });
+    setShowMktModal(true);
+  };
+
+  const openEditMkt = (m: Marketplace) => {
+    setEditMkt(m);
+    setMktForm({ id: m.id, name: m.name, url: m.url, description: m.description, scope: mktScope });
+    setShowMktModal(true);
+  };
+
+  const handleSubmitMkt = async () => {
+    setLoading(true);
+    if (editMkt) {
+      await fetch("/api/admin/mcp/marketplaces", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editMkt.id, scope: mktScope,
+          name: mktForm.name, url: mktForm.url, description: mktForm.description,
+        }),
+      });
+    } else {
+      await fetch("/api/admin/mcp/marketplaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(mktForm),
+      });
+    }
+    await fetchMarketplaces(mktScope);
+    setShowMktModal(false);
+    setLoading(false);
+  };
+
+  const handleToggleMkt = async (m: Marketplace) => {
+    setLoading(true);
+    await fetch("/api/admin/mcp/marketplaces", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: m.id, scope: mktScope, enabled: !m.enabled }),
+    });
+    await fetchMarketplaces(mktScope);
+    setLoading(false);
+  };
+
+  const handleDeleteMkt = async (m: Marketplace) => {
+    if (!confirm(`Remove marketplace "${m.name}"?`)) return;
+    setLoading(true);
+    await fetch("/api/admin/mcp/marketplaces", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: m.id, scope: mktScope }),
+    });
+    await fetchMarketplaces(mktScope);
+    setLoading(false);
+  };
+
   const tabs: { key: Tab; label: string }[] = [
     { key: "catalog", label: "MCP Catalog" },
     { key: "assignments", label: "Department Assignments" },
     { key: "gateways", label: "Gateway Status" },
+    { key: "marketplaces", label: "Plugin Marketplaces" },
   ];
 
   const statusColor = (s: string) => {
@@ -409,6 +495,174 @@ export default function McpManagement() {
                 No gateways created yet
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Marketplaces Tab */}
+      {tab === "marketplaces" && (
+        <div>
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex gap-3 items-center">
+              <label htmlFor="mkt-scope" className="text-sm text-gray-300">Scope:</label>
+              <select
+                id="mkt-scope"
+                value={mktScope}
+                onChange={(e) => setMktScope(e.target.value)}
+                className="bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200"
+              >
+                <option value="common">Common (All Departments)</option>
+                {gateways.map((gw) => (
+                  <option key={gw.department} value={gw.department}>
+                    {gw.department}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={openCreateMkt}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+              disabled={loading}
+            >
+              + Add Marketplace
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {marketplaces.map((m) => (
+              <div
+                key={m.id}
+                className="bg-gray-800 rounded-lg p-4 border border-gray-700"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-semibold text-gray-100">{m.name}</h3>
+                  <span
+                    className={`px-2 py-0.5 rounded text-xs font-medium cursor-pointer ${
+                      m.enabled
+                        ? "bg-green-500/20 text-green-400"
+                        : "bg-gray-500/20 text-gray-400"
+                    }`}
+                    onClick={() => handleToggleMkt(m)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === "Enter" && handleToggleMkt(m)}
+                  >
+                    {m.enabled ? "Enabled" : "Disabled"}
+                  </span>
+                </div>
+                <p className="text-xs text-blue-400 mb-1 truncate">{m.url}</p>
+                <p className="text-xs text-gray-400 mb-3">{m.description}</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">
+                    {m.addedBy ? `by ${m.addedBy}` : ""}
+                    {m.addedAt ? ` · ${new Date(m.addedAt).toLocaleDateString()}` : ""}
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => openEditMkt(m)}
+                      className="px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => handleDeleteMkt(m)}
+                      className="px-2 py-1 text-xs bg-red-900/50 hover:bg-red-900 text-red-400 rounded"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {marketplaces.length === 0 && (
+              <p className="text-gray-500 col-span-2 text-center py-8">
+                No marketplaces configured for this scope
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Marketplace Add / Edit Modal */}
+      {showMktModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-lg border border-gray-700">
+            <h2 className="text-lg font-semibold text-gray-100 mb-4">
+              {editMkt ? "Edit Marketplace" : "Add Marketplace"}
+            </h2>
+            <form
+              onSubmit={(e) => { e.preventDefault(); handleSubmitMkt(); }}
+              className="space-y-4"
+            >
+              <div>
+                <label htmlFor="mkt-id" className="block text-sm text-gray-300 mb-1">Marketplace ID</label>
+                <input
+                  id="mkt-id" type="text" required disabled={!!editMkt}
+                  value={mktForm.id}
+                  onChange={(e) => setMktForm({ ...mktForm, id: e.target.value })}
+                  placeholder="e.g. oh-my-cloud-skills"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200 disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <label htmlFor="mkt-name" className="block text-sm text-gray-300 mb-1">Name</label>
+                <input
+                  id="mkt-name" type="text" required
+                  value={mktForm.name}
+                  onChange={(e) => setMktForm({ ...mktForm, name: e.target.value })}
+                  placeholder="e.g. Oh My Cloud Skills"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="mkt-url" className="block text-sm text-gray-300 mb-1">GitHub URL</label>
+                <input
+                  id="mkt-url" type="url" required
+                  value={mktForm.url}
+                  onChange={(e) => setMktForm({ ...mktForm, url: e.target.value })}
+                  placeholder="https://github.com/org/repo"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="mkt-desc" className="block text-sm text-gray-300 mb-1">Description</label>
+                <input
+                  id="mkt-desc" type="text"
+                  value={mktForm.description}
+                  onChange={(e) => setMktForm({ ...mktForm, description: e.target.value })}
+                  placeholder="Short description"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                />
+              </div>
+              <div>
+                <label htmlFor="mkt-scope" className="block text-sm text-gray-300 mb-1">Scope</label>
+                <select
+                  id="mkt-scope-select"
+                  value={mktForm.scope}
+                  onChange={(e) => setMktForm({ ...mktForm, scope: e.target.value })}
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm text-gray-200"
+                >
+                  <option value="common">Common (All Departments)</option>
+                  {gateways.map((gw) => (
+                    <option key={gw.department} value={gw.department}>{gw.department}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button" onClick={() => setShowMktModal(false)}
+                  className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit" disabled={loading}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors disabled:opacity-50"
+                >
+                  {loading ? "Saving..." : editMkt ? "Update" : "Create"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

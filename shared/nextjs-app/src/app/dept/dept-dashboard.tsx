@@ -11,6 +11,20 @@ import type {
   MonthlyUsage,
   DepartmentListItem,
 } from "@/lib/types";
+
+interface McpAssignment {
+  catalogId: string;
+  name: string;
+  category: string;
+  enabled: boolean;
+}
+
+interface MarketplaceInfo {
+  id: string;
+  name: string;
+  url: string;
+  scope: string;
+}
 import DeptSelector from "@/components/dept/dept-selector";
 import DeptCard from "@/components/dept/dept-card";
 import StatCard from "@/components/cards/stat-card";
@@ -46,6 +60,9 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [monthlyUsage, setMonthlyUsage] = useState<MonthlyUsage[]>([]);
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
+  const [mcpAssignments, setMcpAssignments] = useState<McpAssignment[]>([]);
+  const [mcpGatewayStatus, setMcpGatewayStatus] = useState<string>("unknown");
+  const [marketplaces, setMarketplaces] = useState<MarketplaceInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +110,22 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
             const depts = Array.isArray(listData.data) ? listData.data : listData.data?.departments ?? [];
             setDepartmentList(depts);
           }
+        }
+      }
+      // Fetch MCP assignments + marketplaces for the selected department
+      if (selectedDepartment && selectedDepartment !== "all") {
+        try {
+          const mcpRes = await fetch(`/api/dept/mcp?department=${selectedDepartment}`);
+          if (mcpRes.ok) {
+            const mcpData = await mcpRes.json();
+            setMcpAssignments(mcpData.data?.assignments ?? []);
+            setMcpGatewayStatus(mcpData.data?.gatewayStatus ?? "none");
+            setMarketplaces(mcpData.data?.marketplaces ?? []);
+          }
+        } catch {
+          setMcpAssignments([]);
+          setMcpGatewayStatus("unknown");
+          setMarketplaces([]);
         }
       }
     } catch (err) {
@@ -375,6 +408,58 @@ export default function DeptDashboard({ user, isAdmin }: DeptDashboardProps) {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* MCP Tools Status */}
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-100">
+                MCP Tools
+              </h2>
+              <span className={`px-2 py-0.5 text-xs rounded-full ${
+                mcpGatewayStatus === "ACTIVE" ? "bg-green-900/40 text-green-400"
+                  : mcpGatewayStatus === "SYNCING" ? "bg-yellow-900/40 text-yellow-400"
+                  : mcpGatewayStatus === "FAILED" ? "bg-red-900/40 text-red-400"
+                  : "bg-gray-800 text-gray-500"
+              }`}>
+                Gateway: {mcpGatewayStatus === "none" ? "Not configured" : mcpGatewayStatus}
+              </span>
+            </div>
+            {mcpAssignments.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {mcpAssignments.map((mcp) => (
+                  <div key={mcp.catalogId} className={`flex items-center gap-3 px-3 py-2 rounded-lg border ${
+                    mcp.enabled ? "border-gray-700 bg-gray-800/50" : "border-gray-800 bg-gray-900/50 opacity-60"
+                  }`}>
+                    <div className={`w-2 h-2 rounded-full ${mcp.enabled ? "bg-green-400" : "bg-gray-600"}`} />
+                    <div>
+                      <p className="text-sm font-medium text-gray-200">{mcp.name}</p>
+                      <p className="text-xs text-gray-500">{mcp.category}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No MCP tools assigned to this department</p>
+            )}
+
+            {marketplaces.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-800">
+                <h3 className="text-sm font-medium text-gray-300 mb-2">Plugin Marketplaces</h3>
+                <div className="space-y-1.5">
+                  {marketplaces.map((m) => (
+                    <div key={`${m.scope}-${m.id}`} className="flex items-center gap-2 text-xs">
+                      <span className={`px-1.5 py-0.5 rounded ${
+                        m.scope === "common" ? "bg-blue-500/20 text-blue-400" : "bg-purple-500/20 text-purple-400"
+                      }`}>
+                        {m.scope === "common" ? "Common" : m.scope}
+                      </span>
+                      <span className="text-gray-300">{m.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Pending Approval Requests */}

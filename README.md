@@ -8,7 +8,7 @@
 
 **Multi-user Claude Code Development Platform on AWS Bedrock**
 
-A fully managed, multi-user development platform that provides each developer with an isolated Claude Code + Kiro environment running on Amazon ECS, with centralized management through a Next.js dashboard. Infrastructure is implemented in three IaC tools: CDK (TypeScript), Terraform (HCL), and CloudFormation (YAML).
+A fully managed, multi-user development platform that provides each developer with an isolated Claude Code + Kiro environment on a dedicated EC2 instance (ARM64), with centralized management through a Next.js dashboard. Infrastructure is implemented in three IaC tools: CDK (TypeScript), Terraform (HCL), and CloudFormation (YAML).
 
 ## Architecture
 
@@ -22,15 +22,17 @@ A fully managed, multi-user development platform that provides each developer wi
 - **7-Layer Security** — CloudFront → ALB → Cognito → Security Groups → VPC Endpoints → DNS Firewall → IAM/DLP
 - **Serverless Tracking** — CloudTrail → EventBridge → Lambda → DynamoDB (~$5/month vs $370 with LiteLLM)
 
-### Infrastructure Stacks (5)
+### Infrastructure Stacks (7)
 
 | Stack | Resources |
 |-------|-----------|
 | **01-Network** | VPC (10.100.0.0/16), Public/Private Subnets (2 AZ), NAT Gateway x2, VPC Endpoints x8, DNS Firewall |
 | **02-Security** | Cognito (Hosted UI + OAuth 2.0), ACM, KMS, Secrets Manager, IAM Roles, SNS |
-| **03-Usage Tracking** | DynamoDB, Lambda (usage-tracker + budget-check), EventBridge, CloudTrail |
-| **04-ECS DevEnv** | ECS Cluster (EC2 mode x8), 6 Task Definitions, EFS, ALB, CloudFront |
-| **05-Dashboard** | Next.js Standalone, EC2 ASG, ALB, CloudFront, S3 Deploy Bucket |
+| **03-Usage Tracking** | DynamoDB, Lambda (usage-tracker + budget-check + gateway-manager), EventBridge, CloudTrail, MCP Catalog/Config tables |
+| **04-ECS DevEnv** | ECS Cluster, NLB + Nginx, DynamoDB Routing Table |
+| **05-Dashboard** | Dashboard ECS Ec2Service, ALB, Unified CloudFront (Dashboard + DevEnv), Lambda@Edge |
+| **06-WAF** | WAF WebACL (CloudFront, ALB) |
+| **07-EC2 DevEnv** | EC2-per-user DevEnv: Launch Template, DLP SG, IAM Role, Instance Profile, DynamoDB (cc-user-instances) |
 
 ### AgentCore (Outside CDK)
 
@@ -245,7 +247,7 @@ ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
 
 **AWS Bedrock 기반 멀티유저 Claude Code 개발환경 플랫폼**
 
-개발자마다 격리된 Claude Code + Kiro 환경을 Amazon ECS에서 제공하고, Next.js 대시보드로 중앙 관리하는 완전 관리형 멀티유저 개발 플랫폼입니다. CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 3가지 IaC로 동일 인프라를 구현합니다.
+개발자마다 격리된 Claude Code + Kiro 환경을 전용 EC2 인스턴스(ARM64)에서 제공하고, Next.js 대시보드로 중앙 관리하는 완전 관리형 멀티유저 개발 플랫폼입니다. CDK(TypeScript), Terraform(HCL), CloudFormation(YAML) 3가지 IaC로 동일 인프라를 구현합니다.
 
 ## 아키텍처
 
@@ -259,15 +261,17 @@ ACCOUNT_ID=xxx python3 agent/lambda/create_targets.py
 - **7계층 보안** — CloudFront → ALB → Cognito → Security Groups → VPC Endpoints → DNS Firewall → IAM/DLP
 - **서버리스 추적** — CloudTrail → EventBridge → Lambda → DynamoDB (월 ~$5, LiteLLM 대비 $370 절감)
 
-### 인프라 스택 (5개)
+### 인프라 스택 (7개)
 
 | 스택 | 리소스 |
 |------|--------|
 | **01-Network** | VPC (10.100.0.0/16), Public/Private Subnet (2 AZ), NAT Gateway x2, VPC Endpoint x8, DNS Firewall |
 | **02-Security** | Cognito (Hosted UI + OAuth 2.0), ACM, KMS, Secrets Manager, IAM Roles, SNS |
-| **03-Usage Tracking** | DynamoDB, Lambda (usage-tracker + budget-check), EventBridge, CloudTrail |
-| **04-ECS DevEnv** | ECS Cluster (EC2 모드 x8), Task Definition 6종, EFS, ALB, CloudFront |
-| **05-Dashboard** | Next.js Standalone, EC2 ASG, ALB, CloudFront, S3 Deploy Bucket |
+| **03-Usage Tracking** | DynamoDB, Lambda (usage-tracker + budget-check + gateway-manager), EventBridge, CloudTrail, MCP Catalog/Config 테이블 |
+| **04-ECS DevEnv** | ECS Cluster, NLB + Nginx, DynamoDB Routing Table |
+| **05-Dashboard** | Dashboard ECS Ec2Service, ALB, Unified CloudFront (Dashboard + DevEnv), Lambda@Edge |
+| **06-WAF** | WAF WebACL (CloudFront, ALB) |
+| **07-EC2 DevEnv** | EC2-per-user DevEnv: Launch Template, DLP SG, IAM Role, Instance Profile, DynamoDB (cc-user-instances) |
 
 ### AgentCore (CDK 외부 관리)
 

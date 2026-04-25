@@ -21,7 +21,8 @@ AWS CDK v2 (TypeScript)로 전체 인프라 배포. 7 stacks.
 - `lib/lambda/budget-check.py` - 예산 초과 확인 (5분 주기, IAM Deny Policy 동적 부착)
 - `lib/lambda/nginx-config-gen.py` - Nginx 설정 생성 (DynamoDB Stream → S3). 유저당 3 upstream: code-server(8080), frontend(3000), API(8000)
 - `lib/lambda/ec2-idle-stop.py` - EC2 유휴 자동 중지 + Hibernate 지원 (ADR-010)
-- `lib/lambda/gateway-manager.py` - MCP Gateway 관리
+- `lib/lambda/idle-check.py` - EC2 유휴 상태 확인 (SSM 기반 CPU/세션 체크)
+- `lib/lambda/gateway-manager.py` - MCP Gateway lifecycle 관리 (DDB Streams trigger, ADR-007)
 - `lib/lambda/audit-logger.py` - 감사 로그
 - `lib/lambda/devenv-session-validator/index.js` - NextAuth JWE 쿠키 검증 (Lambda@Edge viewer-request, ADR-013)
 - `lib/lambda/devenv-origin-router/index.js` - Host 기반 origin 라우팅 (Lambda@Edge origin-request, ADR-013)
