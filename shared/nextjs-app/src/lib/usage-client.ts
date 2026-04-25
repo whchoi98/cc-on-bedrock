@@ -1,12 +1,12 @@
 /**
- * Usage Tracking Client — DynamoDB-based usage analytics
+ * Usage Tracking Client (replaces litellm-client.ts)
  * Reads from DynamoDB cc-on-bedrock-usage table
  * Data source: Bedrock Invocation Logging → Lambda → DynamoDB
  */
 import {
   DynamoDBClient,
-  QueryCommand,
   ScanCommand,
+  QueryCommand,
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
@@ -15,6 +15,7 @@ const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const TABLE_NAME = process.env.USAGE_TABLE_NAME ?? "cc-on-bedrock-usage";
 
 const dynamodb = new DynamoDBClient({ region });
+const MAX_PAGES = 100;
 
 // ─── Types ───
 
@@ -69,7 +70,7 @@ export interface DailyUsage {
   estimatedCost: number;
 }
 
-// ─── Internal: parse DynamoDB item to UsageRecord ───
+// ─── Query Functions ───
 
 function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
   const u = unmarshall(item);
@@ -87,121 +88,82 @@ function toUsageRecord(item: Record<string, AttributeValue>): UsageRecord {
   };
 }
 
-// ─── Query Functions ───
-
-async function queryByUser(userId: string, startDate?: string, endDate?: string): Promise<UsageRecord[]> {
-  const keyCondition = startDate || endDate
-    ? "PK = :pk AND #d BETWEEN :start AND :end"
-    : "PK = :pk";
-
-  const exprValues: Record<string, AttributeValue> = {
-    ":pk": { S: `USER#${userId}` },
-  };
-  if (startDate || endDate) {
-    exprValues[":start"] = { S: startDate ?? "2020-01-01" };
-    exprValues[":end"] = { S: endDate ?? "2099-12-31" };
-  }
-
-  const items: Record<string, AttributeValue>[] = [];
-  let lastKey: Record<string, AttributeValue> | undefined;
-
-  do {
-    const result = await dynamodb.send(new QueryCommand({
-      TableName: TABLE_NAME,
-      IndexName: "user-date-index",
-      KeyConditionExpression: keyCondition,
-      ExpressionAttributeValues: exprValues,
-      ...(startDate || endDate ? { ExpressionAttributeNames: { "#d": "date" } } : {}),
-      ExclusiveStartKey: lastKey,
-    }));
-    items.push(...(result.Items ?? []));
-    lastKey = result.LastEvaluatedKey;
-  } while (lastKey);
-
-  return items.map(toUsageRecord);
-}
-
-async function queryByDepartment(department: string, startDate?: string, endDate?: string): Promise<UsageRecord[]> {
-  const keyCondition = startDate || endDate
-    ? "department = :dept AND #d BETWEEN :start AND :end"
-    : "department = :dept";
-
-  const exprValues: Record<string, AttributeValue> = {
-    ":dept": { S: department },
-  };
-  if (startDate || endDate) {
-    exprValues[":start"] = { S: startDate ?? "2020-01-01" };
-    exprValues[":end"] = { S: endDate ?? "2099-12-31" };
-  }
-
-  const items: Record<string, AttributeValue>[] = [];
-  let lastKey: Record<string, AttributeValue> | undefined;
-
-  do {
-    const result = await dynamodb.send(new QueryCommand({
-      TableName: TABLE_NAME,
-      IndexName: "department-date-index",
-      KeyConditionExpression: keyCondition,
-      ExpressionAttributeValues: exprValues,
-      ...(startDate || endDate ? { ExpressionAttributeNames: { "#d": "date" } } : {}),
-      ExclusiveStartKey: lastKey,
-    }));
-    items.push(...(result.Items ?? []));
-    lastKey = result.LastEvaluatedKey;
-  } while (lastKey);
-
-  return items.map(toUsageRecord);
-}
-
-async function scanAllRecords(startDate?: string, endDate?: string): Promise<UsageRecord[]> {
-  const filterParts: string[] = ["begins_with(PK, :userPrefix)"];
-  const exprValues: Record<string, AttributeValue> = {
-    ":userPrefix": { S: "USER#" },
-  };
-
-  if (startDate) {
-    filterParts.push("#d >= :startDate");
-    exprValues[":startDate"] = { S: startDate };
-  }
-  if (endDate) {
-    filterParts.push("#d <= :endDate");
-    exprValues[":endDate"] = { S: endDate };
-  }
-
-  const needsDateAlias = startDate || endDate;
-  const items: Record<string, AttributeValue>[] = [];
-  let lastKey: Record<string, AttributeValue> | undefined;
-
-  do {
-    const result = await dynamodb.send(new ScanCommand({
-      TableName: TABLE_NAME,
-      FilterExpression: filterParts.join(" AND "),
-      ExpressionAttributeValues: exprValues,
-      ...(needsDateAlias ? { ExpressionAttributeNames: { "#d": "date" } } : {}),
-      ExclusiveStartKey: lastKey,
-    }));
-    items.push(...(result.Items ?? []));
-    lastKey = result.LastEvaluatedKey;
-  } while (lastKey);
-
-  return items.map(toUsageRecord);
-}
-
 export async function getUsageRecords(params?: {
   startDate?: string;
   endDate?: string;
   userId?: string;
   department?: string;
 }): Promise<UsageRecord[]> {
-  // Route to the most efficient query path
+  // When userId is known, use Query (single partition) instead of Scan
   if (params?.userId) {
-    return queryByUser(params.userId, params?.startDate, params?.endDate);
+    const keyParts = ["PK = :pk"];
+    const exprValues: Record<string, AttributeValue> = {
+      ":pk": { S: `USER#${params.userId}` },
+    };
+    if (params.startDate && params.endDate) {
+      keyParts.push("SK BETWEEN :start AND :end");
+      exprValues[":start"] = { S: params.startDate };
+      exprValues[":end"] = { S: `${params.endDate}~` };
+    } else if (params.startDate) {
+      keyParts.push("SK >= :start");
+      exprValues[":start"] = { S: params.startDate };
+    } else if (params.endDate) {
+      keyParts.push("SK <= :end");
+      exprValues[":end"] = { S: `${params.endDate}~` };
+    }
+
+    const items: Record<string, AttributeValue>[] = [];
+    let lastKey: Record<string, AttributeValue> | undefined;
+    let pages = 0;
+    do {
+      const result = await dynamodb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: keyParts.join(" AND "),
+        ExpressionAttributeValues: exprValues,
+        ExclusiveStartKey: lastKey,
+      }));
+      items.push(...(result.Items ?? []));
+      lastKey = result.LastEvaluatedKey;
+      pages++;
+    } while (lastKey && pages < MAX_PAGES);
+
+    return items.map(toUsageRecord);
+  }
+
+  // No userId: paginated Scan with optional filters
+  const filterParts: string[] = ["begins_with(PK, :userPrefix)"];
+  const exprValues: Record<string, AttributeValue> = {
+    ":userPrefix": { S: "USER#" },
+  };
+  if (params?.startDate) {
+    filterParts.push("SK >= :startDate");
+    exprValues[":startDate"] = { S: params.startDate };
+  }
+  if (params?.endDate) {
+    filterParts.push("SK <= :endDate");
+    exprValues[":endDate"] = { S: `${params.endDate}~` };
   }
   if (params?.department) {
-    return queryByDepartment(params.department, params?.startDate, params?.endDate);
+    filterParts.push("department = :dept");
+    exprValues[":dept"] = { S: params.department };
   }
-  // Fallback: full scan (admin totals only)
-  return scanAllRecords(params?.startDate, params?.endDate);
+
+  const items: Record<string, AttributeValue>[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
+  do {
+    const result = await dynamodb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: filterParts.join(" AND "),
+      ExpressionAttributeValues: exprValues,
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+    pages++;
+  } while (lastKey && pages < MAX_PAGES);
+
+  return items.map(toUsageRecord);
 }
 
 export async function getUserSummaries(params?: {
@@ -321,6 +283,193 @@ export async function getDailyUsage(params?: {
     existing.requests += r.requests;
     existing.estimatedCost += r.estimatedCost;
     dateMap.set(r.date, existing);
+  }
+
+  return Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ─── Bedrock Usage Snapshot (for Monitoring page) ───
+
+export interface BedrockUsageSnapshot {
+  /** Today's input tokens (cc-on-bedrock only) */
+  inputTokensToday: number;
+  /** Today's output tokens */
+  outputTokensToday: number;
+  /** Today's total tokens */
+  totalTokensToday: number;
+  /** Today's total API invocations */
+  invocationsToday: number;
+  /** Average latency in ms (today, from DynamoDB latencySumMs / requests) */
+  avgLatencyMs: number;
+  /** Today's estimated cost in USD */
+  estimatedCostToday: number;
+  /** Average tokens per hour (totalTokens / hours elapsed today) */
+  tokensPerHour: number;
+  /** Average cost per hour */
+  costPerHour: number;
+  /** Hours elapsed today (for rate computation) */
+  hoursElapsed: number;
+}
+
+export interface BedrockUsageTimeSeriesPoint {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  invocations: number;
+  estimatedCost: number;
+}
+
+/**
+ * Query DEPT# aggregate records for a date range.
+ * These are pre-aggregated by the Lambda (one row per dept per day).
+ */
+async function getDeptAggregates(startDate: string, endDate: string): Promise<{
+  inputTokens: number; outputTokens: number; totalTokens: number;
+  requests: number; estimatedCost: number; latencySumMs: number;
+}> {
+  const items: Record<string, AttributeValue>[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
+  do {
+    const result = await dynamodb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: "begins_with(PK, :deptPrefix) AND SK BETWEEN :start AND :end",
+      ExpressionAttributeValues: {
+        ":deptPrefix": { S: "DEPT#" },
+        ":start": { S: startDate },
+        ":end": { S: `${endDate}~` },
+      },
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+    pages++;
+  } while (lastKey && pages < MAX_PAGES);
+
+  let inputTokens = 0, outputTokens = 0, totalTokens = 0;
+  let requests = 0, estimatedCost = 0, latencySumMs = 0;
+  for (const item of items) {
+    const u = unmarshall(item);
+    inputTokens += u.inputTokens ?? 0;
+    outputTokens += u.outputTokens ?? 0;
+    totalTokens += u.totalTokens ?? 0;
+    requests += u.requests ?? 0;
+    estimatedCost += Number(u.estimatedCost ?? 0);
+    latencySumMs += Number(u.latencySumMs ?? 0);
+  }
+  return { inputTokens, outputTokens, totalTokens, requests, estimatedCost, latencySumMs };
+}
+
+/**
+ * Get today's Bedrock usage from DynamoDB (cc-on-bedrock project only).
+ * Tries USER# records first; falls back to DEPT# aggregates if none found.
+ */
+export async function getBedrockUsageSnapshot(): Promise<BedrockUsageSnapshot> {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const records = await getUsageRecords({ startDate: today, endDate: today });
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let requests = 0;
+  let cost = 0;
+  let latencySum = 0;
+
+  if (records.length > 0) {
+    for (const r of records) {
+      inputTokens += r.inputTokens;
+      outputTokens += r.outputTokens;
+      totalTokens += r.totalTokens;
+      requests += r.requests;
+      cost += r.estimatedCost;
+      latencySum += r.latencySumMs;
+    }
+  } else {
+    const dept = await getDeptAggregates(today, today);
+    inputTokens = dept.inputTokens;
+    outputTokens = dept.outputTokens;
+    totalTokens = dept.totalTokens;
+    requests = dept.requests;
+    cost = dept.estimatedCost;
+    latencySum = dept.latencySumMs;
+  }
+
+  // Hours elapsed since midnight UTC
+  const now = new Date();
+  const midnight = new Date(now);
+  midnight.setUTCHours(0, 0, 0, 0);
+  const hoursElapsed = Math.max((now.getTime() - midnight.getTime()) / 3_600_000, 0.1);
+
+  return {
+    inputTokensToday: inputTokens,
+    outputTokensToday: outputTokens,
+    totalTokensToday: totalTokens,
+    invocationsToday: requests,
+    avgLatencyMs: requests > 0 ? Math.round(latencySum / requests) : 0,
+    estimatedCostToday: cost,
+    tokensPerHour: totalTokens / hoursElapsed,
+    costPerHour: cost / hoursElapsed,
+    hoursElapsed: Math.round(hoursElapsed * 10) / 10,
+  };
+}
+
+/**
+ * Get daily Bedrock usage time series from DynamoDB (cc-on-bedrock project only).
+ * Tries USER# records first; falls back to DEPT# aggregates if none found.
+ */
+export async function getBedrockUsageTimeSeries(
+  days: number = 7,
+): Promise<BedrockUsageTimeSeriesPoint[]> {
+  const endDate = new Date().toISOString().slice(0, 10);
+  const startDate = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+
+  const daily = await getDailyUsage({ startDate, endDate });
+
+  if (daily.length > 0) {
+    return daily.map((d) => ({
+      date: d.date,
+      inputTokens: d.inputTokens,
+      outputTokens: d.outputTokens,
+      totalTokens: d.totalTokens,
+      invocations: d.requests,
+      estimatedCost: d.estimatedCost,
+    }));
+  }
+
+  // Fallback: use DEPT# aggregates (one record per dept per day)
+  const items: Record<string, AttributeValue>[] = [];
+  let lastKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
+  do {
+    const result = await dynamodb.send(new ScanCommand({
+      TableName: TABLE_NAME,
+      FilterExpression: "begins_with(PK, :deptPrefix) AND SK BETWEEN :start AND :end",
+      ExpressionAttributeValues: {
+        ":deptPrefix": { S: "DEPT#" },
+        ":start": { S: startDate },
+        ":end": { S: `${endDate}~` },
+      },
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(result.Items ?? []));
+    lastKey = result.LastEvaluatedKey;
+    pages++;
+  } while (lastKey && pages < MAX_PAGES);
+
+  const dateMap = new Map<string, BedrockUsageTimeSeriesPoint>();
+  for (const item of items) {
+    const u = unmarshall(item);
+    const date = u.SK as string;
+    const existing = dateMap.get(date) ?? {
+      date, inputTokens: 0, outputTokens: 0, totalTokens: 0, invocations: 0, estimatedCost: 0,
+    };
+    existing.inputTokens += u.inputTokens ?? 0;
+    existing.outputTokens += u.outputTokens ?? 0;
+    existing.totalTokens += u.totalTokens ?? 0;
+    existing.invocations += u.requests ?? 0;
+    existing.estimatedCost += Number(u.estimatedCost ?? 0);
+    dateMap.set(date, existing);
   }
 
   return Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date));

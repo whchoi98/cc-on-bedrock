@@ -19,6 +19,8 @@ export class SecurityStack extends cdk.Stack {
   public readonly encryptionKey: kms.Key;
   public readonly cloudfrontSecret: secretsmanager.Secret;
   public readonly dashboardEc2Role: iam.Role;
+  public readonly taskPermissionBoundary: iam.ManagedPolicy;
+  public readonly ecsInfrastructureRole: iam.Role;
 
   constructor(scope: Construct, id: string, props: SecurityStackProps) {
     super(scope, id, props);
@@ -44,7 +46,7 @@ export class SecurityStack extends cdk.Stack {
         minLength: 8,
         requireUppercase: true,
         requireDigits: true,
-        requireSymbols: false,
+        requireSymbols: true,
       },
       customAttributes: {
         subdomain: new cognito.StringAttribute({ mutable: true }),
@@ -65,6 +67,7 @@ export class SecurityStack extends cdk.Stack {
 
     const dashboardUrl = `https://${dashboardDomain}`;
     this.userPoolClient = this.userPool.addClient('AppClient', {
+      generateSecret: true,
       authFlows: { userPassword: true, userSrp: true },
       oAuth: {
         flows: { authorizationCodeGrant: true },
@@ -85,6 +88,12 @@ export class SecurityStack extends cdk.Stack {
       groupName: 'user',
       description: 'Dev environment users',
     });
+    new cognito.CfnUserPoolGroup(this, 'DeptManagerGroup', {
+      userPoolId: this.userPool.userPoolId,
+      groupName: 'dept-manager',
+      description: 'Department managers who can approve users and manage department budgets',
+      precedence: 5,
+    });
 
     // ACM Certificates are created separately after DNS is configured.
     // Once validated, pass certificate ARNs via CDK context:
@@ -98,34 +107,145 @@ export class SecurityStack extends cdk.Stack {
 
     // IAM Roles
     const bedrockPolicy = new iam.PolicyStatement({
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: ['*'],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
+      resources: [
+        'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+      ],
     });
 
     // Note: ECS Task and Execution roles are created in the EcsDevenv stack
     // to avoid cross-stack cyclic references with ECR/EFS/CloudWatch
 
-    // Dashboard EC2 Role
+    // Permission Boundary for per-user ECS Task Roles
+    // Caps the maximum permissions any cc-on-bedrock-task-* role can have
+    this.taskPermissionBoundary = new iam.ManagedPolicy(this, 'TaskPermissionBoundary', {
+      managedPolicyName: 'cc-on-bedrock-task-boundary',
+      statements: [
+        new iam.PolicyStatement({
+          sid: 'BedrockClaude',
+          actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:Converse', 'bedrock:ConverseStream'],
+          resources: [
+            'arn:aws:bedrock:*::foundation-model/anthropic.claude-*',
+            `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*anthropic.claude-*`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          sid: 'S3Access',
+          actions: ['s3:GetObject', 's3:PutObject', 's3:ListBucket'],
+          resources: [
+            `arn:aws:s3:::cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}`,
+            `arn:aws:s3:::cc-on-bedrock-user-data-${cdk.Aws.ACCOUNT_ID}/*`,
+            `arn:aws:s3:::${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}`,
+            `arn:aws:s3:::${config.projectPrefix}-deploy-${cdk.Aws.ACCOUNT_ID}/*`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          sid: 'KmsDecrypt',
+          actions: ['kms:Decrypt', 'kms:DescribeKey', 'kms:GenerateDataKey'],
+          resources: [this.encryptionKey.keyArn],
+        }),
+        new iam.PolicyStatement({
+          sid: 'CloudWatchMetrics',
+          actions: ['cloudwatch:PutMetricData'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'CloudWatchLogs',
+          actions: ['logs:CreateLogStream', 'logs:PutLogEvents', 'logs:CreateLogGroup'],
+          resources: [`arn:aws:logs:*:${cdk.Aws.ACCOUNT_ID}:log-group:/cc-on-bedrock/*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'EcrAuth',
+          actions: ['ecr:GetAuthorizationToken'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'EcrPull',
+          actions: ['ecr:BatchCheckLayerAvailability', 'ecr:GetDownloadUrlForLayer', 'ecr:BatchGetImage'],
+          resources: [`arn:aws:ecr:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:repository/cc-on-bedrock/*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'SsmMessages',
+          actions: ['ssmmessages:CreateControlChannel', 'ssmmessages:CreateDataChannel', 'ssmmessages:OpenControlChannel', 'ssmmessages:OpenDataChannel'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'SecretsRead',
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [`arn:aws:secretsmanager:*:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'AgentCoreGateway',
+          actions: ['bedrock-agentcore:InvokeGateway'],
+          resources: [`arn:aws:bedrock-agentcore:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:gateway/*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'DynamoDbMcpConfig',
+          actions: ['dynamodb:GetItem', 'dynamodb:Query'],
+          resources: [
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-dept-mcp-config`,
+          ],
+        }),
+      ],
+    });
+
+    // ECS Infrastructure Role — required for EBS volume attachment to tasks
+    this.ecsInfrastructureRole = new iam.Role(this, 'EcsInfrastructureRole', {
+      roleName: 'cc-on-bedrock-ecs-infrastructure',
+      assumedBy: new iam.ServicePrincipal('ecs.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSInfrastructureRolePolicyForVolumes'),
+      ],
+    });
+    // Grant KMS access for encrypted EBS volume creation
+    this.encryptionKey.grantEncryptDecrypt(this.ecsInfrastructureRole);
+    // ECS needs CreateGrant to delegate KMS access to EC2 for EBS attach
+    this.ecsInfrastructureRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'KmsCreateGrantForEbs',
+      actions: ['kms:CreateGrant', 'kms:DescribeKey'],
+      resources: [this.encryptionKey.keyArn],
+      conditions: {
+        Bool: { 'kms:GrantIsForAWSResource': 'true' },
+      },
+    }));
+
+    // Dashboard Role (shared by ECS Task + Troubleshooting EC2 instance profile)
     this.dashboardEc2Role = new iam.Role(this, 'DashboardEc2Role', {
       roleName: 'cc-on-bedrock-dashboard-ec2',
-      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('ec2.amazonaws.com'),
+        new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      ),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
       ],
     });
+    this.dashboardEc2Role.addToPolicy(bedrockPolicy);
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: [
         'cognito-idp:AdminCreateUser', 'cognito-idp:AdminDeleteUser',
         'cognito-idp:AdminGetUser', 'cognito-idp:AdminUpdateUserAttributes',
         'cognito-idp:AdminDisableUser', 'cognito-idp:AdminEnableUser',
-        'cognito-idp:AdminAddUserToGroup',
+        'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminSetUserPassword',
         'cognito-idp:ListUsers',
+        'cognito-idp:DescribeUserPoolClient',
       ],
       resources: [this.userPool.userPoolArn],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:TagResource'],
-      resources: ['*'],
+      actions: ['ecs:RunTask', 'ecs:StopTask', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:TagResource', 'ecs:ExecuteCommand'],
+      resources: [
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:cluster/${config.ecsClusterName}`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task/${config.ecsClusterName}/*`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:task-definition/devenv-*`,
+        `arn:aws:ecs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:container-instance/${config.ecsClusterName}/*`,
+      ],
+    }));
+    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
+      sid: 'EfsAccess',
+      actions: ['elasticfilesystem:DescribeFileSystems'],
+      resources: [`arn:aws:elasticfilesystem:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:file-system/*`],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       sid: 'AlbManagement',
@@ -136,7 +256,7 @@ export class SecurityStack extends cdk.Stack {
         'elasticloadbalancing:CreateRule', 'elasticloadbalancing:DeleteRule',
         'elasticloadbalancing:DescribeRules',
       ],
-      resources: ['*'],
+      resources: [`arn:aws:elasticloadbalancing:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*`],
     }));
     this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
       actions: ['iam:PassRole'],
@@ -144,22 +264,94 @@ export class SecurityStack extends cdk.Stack {
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task`,
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-task-execution`,
         `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-ecs-infrastructure`,
       ],
     }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'EfsAccessPointManagement',
-      actions: [
-        'elasticfilesystem:CreateAccessPoint',
-        'elasticfilesystem:DescribeAccessPoints',
-        'elasticfilesystem:DeleteAccessPoint',
+    // Data & infra management — separate managed policy to avoid 10KB inline limit
+    const dataInfraPolicy = new iam.ManagedPolicy(this, 'DashboardDataInfraPolicy', {
+      managedPolicyName: 'cc-on-bedrock-dashboard-data-infra',
+      roles: [this.dashboardEc2Role],
+      statements: [
+        new iam.PolicyStatement({
+          sid: 'IamTaskRoleManagement',
+          actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:TagRole', 'iam:DeleteRole'],
+          resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'SecretsManagerCodeserver',
+          actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue', 'secretsmanager:UpdateSecret', 'secretsmanager:GetSecretValue'],
+          resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:cc-on-bedrock/codeserver/*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'DynamoDBAccess',
+          actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:BatchGetItem'],
+          resources: [
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${config.projectPrefix}-usage/*`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-department-budgets`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-on-bedrock-approval-requests`,
+            `arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-budgets`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          sid: 'RoutingTableAccess',
+          actions: ['dynamodb:PutItem', 'dynamodb:DeleteItem'],
+          resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-routing-table`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'EcsTaskDefRegistration',
+          actions: ['ecs:RegisterTaskDefinition', 'ecs:DescribeTaskDefinition', 'ecs:DescribeClusters'],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'LambdaInvoke',
+          actions: ['lambda:InvokeFunction'],
+          resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:cc-on-bedrock-*`],
+        }),
       ],
-      resources: ['*'],
-    }));
-    this.dashboardEc2Role.addToPolicy(new iam.PolicyStatement({
-      sid: 'EcsTaskDefRegistration',
-      actions: ['ecs:RegisterTaskDefinition', 'ecs:DeregisterTaskDefinition', 'ecs:DescribeTaskDefinition'],
-      resources: ['*'],
-    }));
+    });
+    this.encryptionKey.grantDecrypt(this.dashboardEc2Role);
+
+    // EC2-per-user DevEnv management — separate managed policy to avoid 10KB inline limit
+    const ec2DevenvPolicy = new iam.ManagedPolicy(this, 'DashboardEc2DevenvPolicy', {
+      managedPolicyName: 'cc-on-bedrock-dashboard-ec2-devenv',
+      roles: [this.dashboardEc2Role],
+      statements: [
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvInstances',
+          actions: [
+            'ec2:RunInstances', 'ec2:StartInstances', 'ec2:StopInstances',
+            'ec2:TerminateInstances', 'ec2:DescribeInstances', 'ec2:CreateTags',
+            'ec2:ModifyInstanceAttribute', 'ec2:ModifyNetworkInterfaceAttribute',
+            'ec2:ModifyVolume', 'ec2:DescribeVolumes',
+          ],
+          resources: ['*'],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvDynamoDB',
+          actions: ['dynamodb:Scan', 'dynamodb:Query', 'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem'],
+          resources: [`arn:aws:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/cc-user-instances`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvIamRoles',
+          actions: ['iam:CreateRole', 'iam:GetRole', 'iam:PutRolePolicy', 'iam:TagRole', 'iam:DeleteRole', 'iam:DeleteRolePolicy'],
+          resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvInstanceProfiles',
+          actions: ['iam:CreateInstanceProfile', 'iam:GetInstanceProfile', 'iam:AddRoleToInstanceProfile', 'iam:RemoveRoleFromInstanceProfile'],
+          resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`],
+        }),
+        new iam.PolicyStatement({
+          sid: 'Ec2DevenvPassRole',
+          actions: ['iam:PassRole'],
+          resources: [
+            `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+            `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-devenv-instance`,
+          ],
+        }),
+      ],
+    });
 
     // Outputs
     new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId, exportName: 'cc-user-pool-id' });

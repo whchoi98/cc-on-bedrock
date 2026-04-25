@@ -2,59 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    --background: 220 20% 6%;
-    --foreground: 210 20% 90%;
-    --card: 220 18% 10%;
-    --card-foreground: 210 20% 90%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 220 14% 16%;
-    --secondary-foreground: 210 20% 80%;
-    --muted: 220 14% 16%;
-    --muted-foreground: 215 16% 50%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 220 14% 18%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
-  }
+:root {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 10, 15, 26;
+  --background-end-rgb: 10, 15, 26;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-start-rgb));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @layer base {
   * {
-    @apply border-border;
-  }
-  body {
-    @apply bg-[#0a0f1a] text-gray-200;
+    @apply border-white/5 tracking-tight;
   }
 }
 
-@layer utilities {
-  .border-border {
-    border-color: hsl(var(--border));
-  }
-  .bg-background {
-    background-color: hsl(var(--background));
-  }
-  .text-foreground {
-    color: hsl(var(--foreground));
-  }
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
 }
-::-webkit-scrollbar-track {
-  background: #161b22;
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
 }
-::-webkit-scrollbar-thumb {
-  background: #30363d;
-  border-radius: 3px;
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #484f58;
+
+/* Glassmorphism utility */
+.glass {
+  @apply bg-white/5 backdrop-blur-md border border-white/10;
+}
+
+/* Fancy Gradient Text */
+.gradient-text {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-400 to-blue-500 font-black;
+}
+
+/* Animation utility */
+.animate-glow {
+  animation: glow 4s ease-in-out infinite alternate;
+}
+
+@keyframes glow {
+  from {
+    box-shadow: 0 0 20px -10px rgba(59, 130, 246, 0.5);
+  }
+  to {
+    box-shadow: 0 0 30px 0px rgba(59, 130, 246, 0.8);
+  }
 }

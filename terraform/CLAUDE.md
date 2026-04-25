@@ -11,11 +11,21 @@ Terraform HCL로 전체 인프라 배포. 4개 모듈.
 - `terraform.tfvars.example` - 예제 변수 값
 - `modules/network/` - VPC, Subnets, NAT, VPC Endpoints, Route 53
 - `modules/security/` - Cognito (Hosted UI), ACM, KMS, Secrets Manager, IAM
-- `modules/ecs-devenv/` - ECS Cluster, Task Defs, EFS, NLB+Nginx, DynamoDB Routing, CloudFront
+- `modules/ecs-devenv/` - ECS Cluster, NLB + Nginx Fargate, DynamoDB Routing Table, DLP SGs, Lambda (nginx-config-gen), EC2 DevEnv (Launch Template, per-user IAM)
 - `modules/dashboard/` - Dashboard EC2 ASG, ALB, CloudFront
 - ※ Usage Tracking (DynamoDB, Lambda, EventBridge) 모듈 추가 필요
+
+## Commands
+```bash
+cd terraform && terraform init                 # Initialize
+cd terraform && terraform validate             # Validate
+cd terraform && terraform fmt -recursive       # Format
+cd terraform && terraform plan                 # Preview changes
+cd terraform && terraform apply                # Deploy
+```
 
 ## Rules
 - `terraform fmt -recursive` 후 커밋
 - 모듈 간 의존성은 변수로 전달 (Terraform이 자동 의존성 그래프 구축)
 - `terraform.tfvars.example`을 `terraform.tfvars`로 복사 후 값 수정하여 사용
+- CDK와 동일한 인프라를 구현해야 함 — CDK에 새 리소스 추가 시 TF도 반영 필요
