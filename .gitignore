@@ -19,6 +19,7 @@ cdk/node_modules/
 terraform/.terraform/
 terraform/*.tfstate*
 terraform/.terraform.lock.hcl
+terraform/modules/**/.build/
 
 # IDE
 .vscode/
