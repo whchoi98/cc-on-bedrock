@@ -596,7 +596,7 @@ resource "aws_iam_role_policy" "nginx_config_lambda_access" {
 
 data "archive_file" "nginx_config_lambda" {
   type        = "zip"
-  source_dir  = "${path.module}/../../../cdk/lib/lambda"
+  source_file = "${path.module}/../../../cdk/lib/lambda/nginx-config-gen.py"
   output_path = "${path.module}/.build/nginx-config-gen.zip"
 }
 
