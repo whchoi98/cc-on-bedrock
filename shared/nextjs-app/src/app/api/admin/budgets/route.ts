@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
       results.departments = (deptResult.Items ?? []).map((item) => {
         const u = unmarshall(item);
         return {
-          department: u.department ?? u.PK?.replace("DEPT#", "") ?? "unknown",
+          department: u.dept_id ?? u.department ?? u.PK?.replace("DEPT#", "") ?? "unknown",
           monthlyBudget: Number(u.monthlyBudget ?? 0),
           currentSpend: Number(u.currentSpend ?? 0),
           updatedAt: u.updatedAt ?? "",
@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
       results.users = (userResult.Items ?? []).map((item) => {
         const u = unmarshall(item);
         return {
-          userId: u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
+          userId: u.user_id ?? u.userId ?? u.PK?.replace("USER#", "") ?? "unknown",
           department: u.department ?? "default",
           dailyTokenLimit: Number(u.dailyTokenLimit ?? 100000),
           monthlyBudget: Number(u.monthlyBudget ?? 0),
@@ -99,11 +99,12 @@ export async function PUT(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { type, id, monthlyBudget, dailyTokenLimit } = body as {
+    const { type, id, monthlyBudget, dailyTokenLimit, allowedTiers } = body as {
       type: "department" | "user";
       id: string;
       monthlyBudget?: number;
       dailyTokenLimit?: number;
+      allowedTiers?: string[];
     };
 
     if (!type || !id) {
@@ -116,14 +117,20 @@ export async function PUT(req: NextRequest) {
       if (monthlyBudget === undefined) {
         return NextResponse.json({ error: "monthlyBudget is required for department" }, { status: 400 });
       }
+      const updateParts = ["monthlyBudget = :budget", "updatedAt = :now"];
+      const exprVals: Record<string, { N: string } | { S: string } | { L: { S: string }[] }> = {
+        ":budget": { N: String(monthlyBudget) },
+        ":now": { S: now },
+      };
+      if (allowedTiers && Array.isArray(allowedTiers)) {
+        updateParts.push("allowedTiers = :tiers");
+        exprVals[":tiers"] = { L: allowedTiers.map(t => ({ S: t })) };
+      }
       await dynamodb.send(new UpdateItemCommand({
         TableName: DEPT_BUDGETS_TABLE,
-        Key: { department: { S: id } },
-        UpdateExpression: "SET monthlyBudget = :budget, updatedAt = :now",
-        ExpressionAttributeValues: {
-          ":budget": { N: String(monthlyBudget) },
-          ":now": { S: now },
-        },
+        Key: { dept_id: { S: id } },
+        UpdateExpression: `SET ${updateParts.join(", ")}`,
+        ExpressionAttributeValues: exprVals,
       }));
     } else if (type === "user") {
       const updateParts: string[] = ["updatedAt = :now"];
@@ -146,7 +153,7 @@ export async function PUT(req: NextRequest) {
 
       await dynamodb.send(new UpdateItemCommand({
         TableName: USER_BUDGETS_TABLE,
-        Key: { userId: { S: id } },
+        Key: { user_id: { S: id } },
         UpdateExpression: `SET ${updateParts.join(", ")}`,
         ExpressionAttributeValues: exprValues,
       }));

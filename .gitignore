@@ -2,6 +2,7 @@
 node_modules/
 .next/
 dist/
+tsconfig.tsbuildinfo
 
 # Python
 __pycache__/
@@ -10,12 +11,15 @@ __pycache__/
 
 # CDK
 cdk/cdk.out/
+cdk/cdk.out.*/
+cdk/cdk.context.json
 cdk/node_modules/
 
 # Terraform
 terraform/.terraform/
 terraform/*.tfstate*
 terraform/.terraform.lock.hcl
+terraform/modules/**/.build/
 
 # IDE
 .vscode/
@@ -27,8 +31,30 @@ Thumbs.db
 
 # Secrets
 *.env
+.env
+.env.*
+!.env.example
 *.pem
 *.key
 
+# OMC
+.omc/
+
+# Playwright MCP
+.playwright-mcp/
+
 # Docker
 docker/devenv/scripts/__pycache__/
+
+# Temporary files
+*.skill
+mockup-*.png
+mockup-*.html
+signin-page.png
+
+# Superpowers plans (session-specific)
+docs/superpowers/plans/
+docs-*.png
+*.mov
+docusaurus-*.png
+Screenshot*.png
