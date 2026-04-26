@@ -5,6 +5,7 @@ E2E 통합 테스트, Docker 컨테이너 테스트, Next.js 단위 테스트.
 
 ## Key Files
 - `integration/test-e2e.sh` - 전체 E2E 테스트 (Docker, CDK, TF, CFN, Next.js, ShellCheck)
+- `integration/test-mcp-gateway.sh` - MCP Gateway E2E 테스트 (ADR-007, 41 checks)
 - `docker/test-devenv.sh` - DevEnv 컨테이너 통합 테스트
 - `../shared/nextjs-app/src/lib/__tests__/` - Dashboard 단위 테스트 (vitest)
 
@@ -14,6 +15,7 @@ E2E 통합 테스트, Docker 컨테이너 테스트, Next.js 단위 테스트.
 bash tests/integration/test-e2e.sh              # 전체 E2E
 bash tests/integration/test-e2e.sh --skip-docker # Docker 제외
 bash tests/integration/test-e2e.sh --only-iac    # IaC만
+bash tests/integration/test-mcp-gateway.sh       # MCP Gateway E2E (41 checks)
 bash tests/docker/test-devenv.sh                 # 컨테이너 테스트
 
 # Dashboard Unit Tests (vitest)
