@@ -37,6 +37,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "department is required" }, { status: 400 });
   }
 
+  // Cross-department guard is already enforced above by deriving `department` from `userDept`
+  // for non-admins (`isAdmin ? deptParam : userDept`). PR #11's redundant secondary check was
+  // removed during merge with feat/dept-mcp-completion@91b06e5 which introduced the cleaner pattern.
+
   try {
     // Get gateway status
     const gwResult = await dynamodb.send(new GetItemCommand({
