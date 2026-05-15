@@ -7,7 +7,9 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as kms from 'aws-cdk-lib/aws-kms';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -18,6 +20,10 @@ export interface LocalGovernanceStackProps extends cdk.StackProps {
   encryptionKey: kms.Key;
   usageTable: dynamodb.Table;
   taskPermissionBoundary: iam.ManagedPolicy;
+  // ADR-022: the provisioner Lambda calls AdminGetUser / AdminUpdateUserAttributes /
+  // ListUsersInGroup. CloudTrail redacts username + custom attrs in events, so the
+  // Lambda has to re-fetch via the userPool ARN granted here.
+  userPool: cognito.UserPool;
 }
 
 /**
@@ -38,7 +44,7 @@ export class LocalGovernanceStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: LocalGovernanceStackProps) {
     super(scope, id, props);
-    const { config, encryptionKey, usageTable, taskPermissionBoundary } = props;
+    const { config, encryptionKey, usageTable, taskPermissionBoundary, userPool } = props;
 
     // ──────────────────────────────────────────────────────────
     // SNS alert topic
@@ -75,7 +81,10 @@ export class LocalGovernanceStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'sts-issuer.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
-      timeout: cdk.Duration.seconds(20),
+      // ADR-022: retry budget bumped to 6 attempts (31s of sleeps) for the
+      // pre-provisioner-miss fallback path. Lambda timeout must accommodate
+      // the worst-case AssumeRole + 31s backoff + ensure_role + DDB lookups.
+      timeout: cdk.Duration.seconds(45),
       memorySize: 256,
       environment: {
         ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
@@ -132,6 +141,147 @@ export class LocalGovernanceStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'StsIssuerFunctionArn', {
       value: this.stsIssuerFunction.functionArn,
       exportName: 'cc-on-bedrock-sts-issuer-arn',
+    });
+
+    // ──────────────────────────────────────────────────────────
+    // User Role Provisioner Lambda (ADR-022)
+    // Pre-creates Local Governance role + EC2 task role/profile + canonical
+    // custom:subdomain + custom:dept_manager_sub on each Cognito user event so
+    // every entry point (seed script, dashboard, console, SDK) converges on
+    // the same downstream state — removes the IAM-propagation race at first use.
+    // ──────────────────────────────────────────────────────────
+    // DLQ for events the provisioner can't process (subdomain collision, repeated
+    // 5xx, IAM throttling spike). EventBridge default retry is 24h / 185 tries
+    // and then drops silently — unacceptable for an identity provisioner.
+    const provisionerDlq = new sqs.Queue(this, 'UserRoleProvisionerDlq', {
+      queueName: 'cc-on-bedrock-user-role-provisioner-dlq',
+      retentionPeriod: cdk.Duration.days(14),
+      encryptionMasterKey: encryptionKey,
+    });
+    // EventBridge needs kms:GenerateDataKey on the customer KMS key to encrypt
+    // DLQ payloads it writes after a failed target delivery. CDK auto-grants
+    // SendMessage on the queue (queue policy) but skips the KMS side, so DLQ
+    // writes silently fail with KMSAccessDenied.
+    //
+    // Scope: only GenerateDataKey + Decrypt (DLQ-writing minimum), and only
+    // when the call is delegated through SQS in this region (`kms:ViaService`).
+    // This prevents EventBridge rules elsewhere in the account from using the
+    // shared CMK for unrelated operations.
+    encryptionKey.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'EventBridgeDlqEncrypt',
+      principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+      actions: ['kms:GenerateDataKey', 'kms:Decrypt'],
+      resources: ['*'],
+      conditions: {
+        StringEquals: {
+          'kms:ViaService': `sqs.${cdk.Aws.REGION}.amazonaws.com`,
+        },
+      },
+    }));
+
+    const provisioner = new lambda.Function(this, 'UserRoleProvisioner', {
+      functionName: 'cc-on-bedrock-user-role-provisioner',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'user-role-provisioner.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, 'lambda')),
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      deadLetterQueue: provisionerDlq,
+      deadLetterQueueEnabled: true,
+      environment: {
+        ACCOUNT_ID: cdk.Aws.ACCOUNT_ID,
+        PERMISSION_BOUNDARY_NAME: 'cc-on-bedrock-task-boundary',
+        // Trust principal of the per-user Local Gov role is the STS Issuer Lambda role
+        // (only Lambda that AssumeRoles into it). Same value sts-issuer.py uses.
+        ASSUMER_ROLE_ARN: this.stsIssuerFunction.role!.roleArn,
+        MAX_SESSION_DURATION_SECONDS: '3600',
+        // CloudTrail redacts user attributes — Lambda re-fetches via AdminGetUser.
+        USER_POOL_ID: userPool.userPoolId,
+      },
+      logRetention: logs.RetentionDays.ONE_MONTH,
+    });
+
+    // Per-user IAM (Local Gov)
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamLocalUserRoleMgmt',
+      actions: [
+        'iam:CreateRole', 'iam:GetRole', 'iam:UpdateAssumeRolePolicy',
+        'iam:PutRolePolicy', 'iam:TagRole', 'iam:UntagRole', 'iam:ListRoleTags',
+      ],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-local-user-*`],
+    }));
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamPermissionBoundaryRead',
+      actions: ['iam:GetPolicy', 'iam:GetPolicyVersion'],
+      resources: [taskPermissionBoundary.managedPolicyArn],
+    }));
+    // Per-user IAM (EC2 task) + instance profile. PassRole is required because
+    // AddRoleToInstanceProfile treats it as passing the role into ec2.amazonaws.com.
+    // Split into two statements so we can scope PassRole with a service condition.
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamEc2TaskRoleMgmt',
+      actions: [
+        'iam:CreateRole', 'iam:GetRole', 'iam:UpdateAssumeRolePolicy',
+        'iam:PutRolePolicy', 'iam:TagRole', 'iam:UntagRole', 'iam:ListRoleTags',
+        'iam:CreateInstanceProfile', 'iam:GetInstanceProfile',
+        'iam:AddRoleToInstanceProfile',
+      ],
+      resources: [
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`,
+        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:instance-profile/cc-on-bedrock-task-*`,
+      ],
+    }));
+    // PassRole scoped to ec2.amazonaws.com so the provisioner cannot pass these
+    // task roles to other service principals (least-privilege).
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'IamPassRoleToEc2',
+      actions: ['iam:PassRole'],
+      resources: [`arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:role/cc-on-bedrock-task-*`],
+      conditions: {
+        StringEquals: { 'iam:PassedToService': 'ec2.amazonaws.com' },
+      },
+    }));
+    // Cognito reads (recover redacted attrs) + writes (set canonical
+    // custom:subdomain + custom:dept_manager_sub).
+    provisioner.addToRolePolicy(new iam.PolicyStatement({
+      sid: 'CognitoUserReadWrite',
+      actions: [
+        'cognito-idp:AdminGetUser',
+        'cognito-idp:ListUsers',
+        'cognito-idp:ListUsersInGroup',
+        'cognito-idp:AdminUpdateUserAttributes',
+      ],
+      resources: [userPool.userPoolArn],
+    }));
+
+    // Single EventBridge rule for all relevant Cognito-IDP events.
+    // We previously tried to filter group-membership events on
+    // requestParameters.groupName=dept-manager at the EventBridge layer to
+    // suppress noise invocations, but some account configurations mask the
+    // ENTIRE requestParameters object as HIDDEN_DUE_TO_SECURITY_REASONS —
+    // which would cause the rule to never match and silently drop manager
+    // promotions. Filtering for the dept-manager group happens inside the
+    // Lambda handler instead (handler returns skipped:group_not_dept_manager).
+    new events.Rule(this, 'CognitoUserCreatedRule', {
+      ruleName: 'cc-on-bedrock-cognito-user-created',
+      description: 'Trigger UserRoleProvisioner on AdminCreateUser / SignUp / AdminAddUserToGroup / AdminRemoveUserFromGroup (ADR-022)',
+      eventPattern: {
+        source: ['aws.cognito-idp'],
+        detailType: ['AWS API Call via CloudTrail'],
+        detail: {
+          eventSource: ['cognito-idp.amazonaws.com'],
+          eventName: ['AdminCreateUser', 'SignUp', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup'],
+        },
+      },
+      targets: [new targets.LambdaFunction(provisioner, {
+        deadLetterQueue: provisionerDlq,
+      })],
+    });
+
+    new cdk.CfnOutput(this, 'UserRoleProvisionerArn', {
+      value: provisioner.functionArn,
+      description: 'User Role Provisioner Lambda ARN (ADR-022)',
+      exportName: 'cc-on-bedrock-user-role-provisioner-arn',
     });
 
     // ──────────────────────────────────────────────────────────

@@ -211,7 +211,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
   // Per-user code-server password (Secrets Manager)
   const codeserverPassword = await ensureCodeserverPassword(input.subdomain);
 
-  const result = await ec2Client.send(new RunInstancesCommand({
+  const result = await runInstancesWithIamRetry({
     ImageId: amiId!,
     IamInstanceProfile: { Name: instanceProfileName },
     InstanceType: tier.type as never,
@@ -286,7 +286,7 @@ export async function startInstance(input: StartInstanceInput): Promise<Instance
       `# MCP config sync — delegate to AMI script (ADR-007 §6)`,
       `[ -x /opt/cc-on-bedrock/sync-mcp-config.sh ] && bash /opt/cc-on-bedrock/sync-mcp-config.sh 2>/dev/null || true`,
     ].join("\n")).toString("base64"),
-  }));
+  });
 
   const instanceId = result.Instances?.[0]?.InstanceId;
   if (!instanceId) throw new Error("Failed to create instance");
@@ -1203,6 +1203,33 @@ async function applyGatewayPolicy(roleName: string, department: string): Promise
   }
 }
 
+// RunInstances right after CreateInstanceProfile + AddRoleToInstanceProfile occasionally
+// fails with InvalidParameterValue "Invalid IAM Instance Profile name" because the EC2
+// control plane hasn't yet seen the new profile (IAM eventual consistency). A short
+// sleep after CreateInstanceProfile is not always enough; retry on that specific error.
+async function runInstancesWithIamRetry(
+  params: ConstructorParameters<typeof RunInstancesCommand>[0],
+  maxAttempts = 6,
+) {
+  let delay = 2000;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await ec2Client.send(new RunInstancesCommand(params));
+    } catch (err) {
+      const msg = (err as Error)?.message ?? "";
+      const isPropagation =
+        msg.includes("Invalid IAM Instance Profile name") ||
+        msg.includes("iamInstanceProfile.name is invalid");
+      if (!isPropagation || attempt === maxAttempts - 1) throw err;
+      console.warn(`[EC2] IAM instance profile not yet visible (attempt ${attempt + 1}/${maxAttempts}); sleeping ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 15000);
+    }
+  }
+  // Unreachable — the last iteration either returns or throws.
+  throw new Error("runInstancesWithIamRetry: exhausted retries (should not happen)");
+}
+
 async function ensureUserInstanceProfile(subdomain: string, username: string, department: string): Promise<string> {
   const roleName = `${ROLE_PREFIX}-${subdomain}`;
   const profileName = roleName;
@@ -1240,13 +1267,18 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
       Description: `Per-user EC2 DevEnv Role for ${subdomain}`,
       Tags: [
         { Key: "cc-on-bedrock", Value: "user-instance-role" },
-        { Key: "subdomain", Value: subdomain },
+        // subdomain is part of costAllocationTags; spreading it again here causes
+        // CreateRole to reject with "Duplicate tag keys found".
         ...costAllocationTags,
       ],
     }));
-
-    // Wait for IAM propagation (new role only)
-    await new Promise(r => setTimeout(r, 8000));
+    // Short propagation sleep so the immediately-following PutRolePolicy +
+    // applyGatewayPolicy calls don't race CreateRole with NoSuchEntity (their
+    // failure path is not wrapped in retry — only RunInstances has
+    // runInstancesWithIamRetry below). 3s is enough for IAM internal
+    // consistency; the RunInstances-vs-instance-profile race takes longer and
+    // is absorbed by the retry helper.
+    await new Promise(r => setTimeout(r, 3000));
   }
 
   // Upsert Bedrock + SSM + CloudWatch permissions (runs on every start to fix legacy roles)
@@ -1284,9 +1316,19 @@ async function ensureUserInstanceProfile(subdomain: string, username: string, de
   // Apply AgentCore Gateway access policy (updates on every start to reflect dept changes)
   await applyGatewayPolicy(roleName, department);
 
-  // Ensure instance profile exists
+  // Ensure instance profile exists AND has the role attached. Handles the orphan
+  // case where a previous run created the profile but crashed before attaching the
+  // role (the provisioner Lambda for example, before PassRole permission was added).
   try {
-    await iamClient.send(new GetInstanceProfileCommand({ InstanceProfileName: profileName }));
+    const got = await iamClient.send(new GetInstanceProfileCommand({ InstanceProfileName: profileName }));
+    const attached = got.InstanceProfile?.Roles ?? [];
+    if (!attached.some(r => r.RoleName === roleName)) {
+      await iamClient.send(new AddRoleToInstanceProfileCommand({
+        InstanceProfileName: profileName,
+        RoleName: roleName,
+      }));
+      await new Promise(r => setTimeout(r, 5000)); // propagation
+    }
   } catch {
     await iamClient.send(new CreateInstanceProfileCommand({ InstanceProfileName: profileName }));
     await iamClient.send(new AddRoleToInstanceProfileCommand({
