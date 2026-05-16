@@ -6,7 +6,6 @@ import AIAssistant from "./ai-assistant";
 export default async function AIPage() {
   const session = await getServerSession(authOptions);
   if (!session) redirect("/api/auth/signin");
-  if (!session.user.isAdmin) redirect("/");
 
   return <AIAssistant />;
 }

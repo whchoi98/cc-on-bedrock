@@ -29,8 +29,8 @@ export async function GET(req: NextRequest) {
   try {
     switch (action) {
       case "spend_logs": {
-        // SpendLog-compatible format for analytics dashboard
-        const effectiveUserId = session.user.isAdmin ? userId : session.user.id;
+        // DynamoDB PK is USER#{subdomain}, not Cognito sub UUID
+        const effectiveUserId = session.user.isAdmin ? userId : session.user.subdomain;
         const records = await getUsageRecords({
           startDate,
           endDate,
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
       }
 
       case "spend_per_day": {
-        const effectiveUserId = session.user.isAdmin ? userId : session.user.id;
+        const effectiveUserId = session.user.isAdmin ? userId : session.user.subdomain;
         const daily = await getDailyUsage({ startDate, endDate, userId: effectiveUserId });
         return NextResponse.json({ success: true, data: daily });
       }

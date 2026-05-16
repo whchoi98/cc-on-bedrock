@@ -5,8 +5,10 @@ import type { CognitoUser } from "@/lib/types";
 
 interface UsersTableProps {
   users: CognitoUser[];
-  onDelete?: (username: string) => void;
+  onResetEnvironment?: (username: string) => void;
+  onPermanentDelete?: (username: string) => void;
   onToggle?: (username: string, enabled: boolean) => void;
+  onUpdate?: (username: string, field: string, value: string) => Promise<void>;
 }
 
 const tierBadge: Record<string, string> = {
@@ -21,13 +23,18 @@ const policyBadge: Record<string, string> = {
   locked: "bg-red-900/40 text-red-400",
 };
 
+const storageBadge: Record<string, string> = {
+  ebs: "bg-indigo-900/40 text-indigo-400",
+  efs: "bg-teal-900/40 text-teal-400",
+};
+
 const statusBadge: Record<string, string> = {
   CONFIRMED: "bg-green-900/40 text-green-400",
   FORCE_CHANGE_PASSWORD: "bg-yellow-900/40 text-yellow-400",
   DISABLED: "bg-gray-800 text-gray-500",
 };
 
-type SortKey = "email" | "subdomain" | "containerOs" | "resourceTier" | "securityPolicy" | "status";
+type SortKey = "email" | "subdomain" | "containerOs" | "resourceTier" | "securityPolicy" | "storageType" | "status";
 type SortDir = "asc" | "desc";
 
 const tierOrder: Record<string, number> = { light: 0, standard: 1, power: 2 };
@@ -44,9 +51,24 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 
 export default function UsersTable({
   users,
-  onDelete,
+  onResetEnvironment,
+  onPermanentDelete,
   onToggle,
+  onUpdate,
 }: UsersTableProps) {
+  const [editingCell, setEditingCell] = useState<{ username: string; field: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleInlineChange = async (username: string, field: string, value: string) => {
+    if (!onUpdate) return;
+    setSaving(true);
+    try {
+      await onUpdate(username, field, value);
+    } finally {
+      setSaving(false);
+      setEditingCell(null);
+    }
+  };
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("email");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -54,6 +76,7 @@ export default function UsersTable({
   const [filterTier, setFilterTier] = useState<string>("all");
   const [filterPolicy, setFilterPolicy] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterStorage, setFilterStorage] = useState<string>("all");
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -64,7 +87,7 @@ export default function UsersTable({
     }
   };
 
-  const activeFilters = [filterOs, filterTier, filterPolicy, filterStatus].filter((f) => f !== "all").length + (search ? 1 : 0);
+  const activeFilters = [filterOs, filterTier, filterPolicy, filterStatus, filterStorage].filter((f) => f !== "all").length + (search ? 1 : 0);
 
   const sorted = useMemo(() => {
     const filtered = users.filter((u) => {
@@ -75,6 +98,7 @@ export default function UsersTable({
       if (filterOs !== "all" && u.containerOs !== filterOs) return false;
       if (filterTier !== "all" && u.resourceTier !== filterTier) return false;
       if (filterPolicy !== "all" && u.securityPolicy !== filterPolicy) return false;
+      if (filterStorage !== "all" && (u.storageType ?? "efs") !== filterStorage) return false;
       if (filterStatus === "enabled" && !u.enabled) return false;
       if (filterStatus === "disabled" && u.enabled) return false;
       if (filterStatus === "pending" && u.status !== "FORCE_CHANGE_PASSWORD") return false;
@@ -88,6 +112,7 @@ export default function UsersTable({
         case "containerOs": return mul * a.containerOs.localeCompare(b.containerOs);
         case "resourceTier": return mul * ((tierOrder[a.resourceTier] ?? 0) - (tierOrder[b.resourceTier] ?? 0));
         case "securityPolicy": return mul * ((policyOrder[a.securityPolicy] ?? 0) - (policyOrder[b.securityPolicy] ?? 0));
+        case "storageType": return mul * (a.storageType ?? "efs").localeCompare(b.storageType ?? "efs");
         case "status": {
           const sa = a.enabled ? (a.status === "CONFIRMED" ? 2 : 1) : 0;
           const sb = b.enabled ? (b.status === "CONFIRMED" ? 2 : 1) : 0;
@@ -96,7 +121,7 @@ export default function UsersTable({
         default: return 0;
       }
     });
-  }, [users, search, filterOs, filterTier, filterPolicy, filterStatus, sortKey, sortDir]);
+  }, [users, search, filterOs, filterTier, filterPolicy, filterStorage, filterStatus, sortKey, sortDir]);
 
   const thClass = "px-5 py-3 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider cursor-pointer select-none hover:text-gray-300 transition-colors";
   const selectClass = "px-2 py-1.5 text-xs bg-[#0d1117] border border-gray-700 text-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500";
@@ -128,6 +153,11 @@ export default function UsersTable({
           <option value="restricted">Restricted</option>
           <option value="locked">Locked</option>
         </select>
+        <select value={filterStorage} onChange={(e) => setFilterStorage(e.target.value)} className={selectClass}>
+          <option value="all">All Storage</option>
+          <option value="ebs">EBS</option>
+          <option value="efs">EFS</option>
+        </select>
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className={selectClass}>
           <option value="all">All Status</option>
           <option value="enabled">Enabled</option>
@@ -136,7 +166,7 @@ export default function UsersTable({
         </select>
         {activeFilters > 0 && (
           <button
-            onClick={() => { setSearch(""); setFilterOs("all"); setFilterTier("all"); setFilterPolicy("all"); setFilterStatus("all"); }}
+            onClick={() => { setSearch(""); setFilterOs("all"); setFilterTier("all"); setFilterPolicy("all"); setFilterStorage("all"); setFilterStatus("all"); }}
             className="px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded transition-colors"
           >
             Clear ({activeFilters})
@@ -153,6 +183,7 @@ export default function UsersTable({
               <th className={thClass} onClick={() => handleSort("containerOs")}>OS<SortIcon active={sortKey === "containerOs"} dir={sortDir} /></th>
               <th className={thClass} onClick={() => handleSort("resourceTier")}>Tier<SortIcon active={sortKey === "resourceTier"} dir={sortDir} /></th>
               <th className={thClass} onClick={() => handleSort("securityPolicy")}>Security<SortIcon active={sortKey === "securityPolicy"} dir={sortDir} /></th>
+              <th className={thClass} onClick={() => handleSort("storageType")}>Storage<SortIcon active={sortKey === "storageType"} dir={sortDir} /></th>
               <th className={thClass} onClick={() => handleSort("status")}>Status<SortIcon active={sortKey === "status"} dir={sortDir} /></th>
               <th className="px-5 py-3 text-right text-[10px] font-medium text-gray-500 uppercase tracking-wider">Actions</th>
             </tr>
@@ -165,17 +196,59 @@ export default function UsersTable({
                   <p className="text-[10px] text-gray-600">{user.username}</p>
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-400">{user.subdomain}</td>
-                <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-400">
-                  {user.containerOs === "al2023" ? "Amazon Linux" : "Ubuntu"}
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  {editingCell?.username === user.username && editingCell?.field === "containerOs" ? (
+                    <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.containerOs} disabled={saving}
+                      onChange={(e) => handleInlineChange(user.username, "containerOs", e.target.value)}
+                      onBlur={() => setEditingCell(null)}>
+                      <option value="ubuntu">Ubuntu</option>
+                      <option value="al2023">AL2023</option>
+                    </select>
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "containerOs" })}
+                      className={`text-sm text-gray-400 ${onUpdate ? "hover:text-blue-400 cursor-pointer" : ""}`}>
+                      {user.containerOs === "al2023" ? "Amazon Linux" : "Ubuntu"}
+                    </button>
+                  )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">
-                  <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${tierBadge[user.resourceTier] ?? tierBadge.standard}`}>
-                    {user.resourceTier}
-                  </span>
+                  {editingCell?.username === user.username && editingCell?.field === "resourceTier" ? (
+                    <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.resourceTier} disabled={saving}
+                      onChange={(e) => handleInlineChange(user.username, "resourceTier", e.target.value)}
+                      onBlur={() => setEditingCell(null)}>
+                      <option value="light">Light</option>
+                      <option value="standard">Standard</option>
+                      <option value="power">Power</option>
+                    </select>
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "resourceTier" })}
+                      className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${tierBadge[user.resourceTier] ?? tierBadge.standard} ${onUpdate ? "hover:ring-1 hover:ring-blue-500 cursor-pointer" : ""}`}>
+                      {user.resourceTier}
+                    </button>
+                  )}
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">
-                  <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${policyBadge[user.securityPolicy] ?? policyBadge.restricted}`}>
-                    {user.securityPolicy}
+                  {editingCell?.username === user.username && editingCell?.field === "securityPolicy" ? (
+                    <select autoFocus className="px-2 py-1 text-xs bg-[#0d1117] border border-blue-500 text-gray-200 rounded-lg focus:outline-none"
+                      defaultValue={user.securityPolicy} disabled={saving}
+                      onChange={(e) => handleInlineChange(user.username, "securityPolicy", e.target.value)}
+                      onBlur={() => setEditingCell(null)}>
+                      <option value="open">Open</option>
+                      <option value="restricted">Restricted</option>
+                      <option value="locked">Locked</option>
+                    </select>
+                  ) : (
+                    <button onClick={() => onUpdate && setEditingCell({ username: user.username, field: "securityPolicy" })}
+                      className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full ${policyBadge[user.securityPolicy] ?? policyBadge.restricted} ${onUpdate ? "hover:ring-1 hover:ring-blue-500 cursor-pointer" : ""}`}>
+                      {user.securityPolicy}
+                    </button>
+                  )}
+                </td>
+                <td className="px-5 py-3.5 whitespace-nowrap">
+                  <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full uppercase ${storageBadge[user.storageType ?? "ebs"] ?? storageBadge.ebs}`}>
+                    {(user.storageType ?? "ebs").toUpperCase()}
                   </span>
                 </td>
                 <td className="px-5 py-3.5 whitespace-nowrap">
@@ -197,9 +270,17 @@ export default function UsersTable({
                         {user.enabled ? "Disable" : "Enable"}
                       </button>
                     )}
-                    {onDelete && (
+                    {onResetEnvironment && user.subdomain && (
                       <button
-                        onClick={() => onDelete(user.username)}
+                        onClick={() => onResetEnvironment(user.username)}
+                        className="px-2 py-1 text-xs font-medium text-orange-400 hover:bg-orange-900/30 rounded-lg transition-colors"
+                      >
+                        Reset Env
+                      </button>
+                    )}
+                    {onPermanentDelete && (
+                      <button
+                        onClick={() => onPermanentDelete(user.username)}
                         className="px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"
                       >
                         Delete
@@ -211,7 +292,7 @@ export default function UsersTable({
             ))}
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-600">
+                <td colSpan={8} className="px-6 py-12 text-center text-sm text-gray-600">
                   No users found.
                 </td>
               </tr>

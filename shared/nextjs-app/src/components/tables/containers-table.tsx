@@ -37,7 +37,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 export default function ContainersTable({
   containers,
   onStop,
-  domainName = "example.com",
+  domainName = "atomai.click",
   devSubdomain = "dev",
 }: ContainersTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("user");
@@ -185,6 +185,13 @@ export default function ContainersTable({
                         }`}>
                           {container.resourceTier}
                         </span>
+                        {container.storageType && (
+                          <span className={`px-1.5 py-0.5 text-[10px] rounded ${
+                            container.storageType === "ebs" ? "bg-blue-900/40 text-blue-400" : "bg-green-900/40 text-green-400"
+                          }`}>
+                            {container.storageType.toUpperCase()}
+                          </span>
+                        )}
                       </div>
                       <span className="text-[9px] text-gray-600">
                         {Math.round(parseInt(container.cpu || "0") / 1024)} vCPU / {Math.round(parseInt(container.memory || "0") / 1024)} GiB
@@ -198,14 +205,18 @@ export default function ContainersTable({
                   </td>
                   <td className="px-5 py-3.5 whitespace-nowrap">
                     {container.status === "RUNNING" && container.subdomain ? (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
-                      >
-                        {url}
-                      </a>
+                      container.healthStatus === "HEALTHY" || container.healthStatus === "UNKNOWN" ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-400 hover:text-blue-300 hover:underline"
+                        >
+                          {url}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-yellow-500 animate-pulse">Starting...</span>
+                      )
                     ) : (
                       <span className="text-xs text-gray-600">-</span>
                     )}

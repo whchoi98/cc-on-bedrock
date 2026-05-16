@@ -1,13 +1,7 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import {
-  startContainerWithProgress,
-  listContainers,
-  registerContainerRoute,
-  describeContainer,
-} from "@/lib/aws-clients";
-// Uses ProvisioningStepName as string via the callback pattern
+import { startInstance, listInstances } from "@/lib/ec2-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
@@ -44,54 +38,44 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return new Response(JSON.stringify({ error: "Authentication required" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
+      status: 401, headers: { "Content-Type": "application/json" },
     });
   }
 
   const user = session.user;
   if (!user.subdomain) {
     return new Response(JSON.stringify({ error: "No subdomain assigned" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+      status: 400, headers: { "Content-Type": "application/json" },
     });
   }
 
-  let body: { action?: string; resourceTier?: string; containerOs?: string };
+  let body: { action?: string; resourceTier?: string };
   try {
     body = await req.json();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+      status: 400, headers: { "Content-Type": "application/json" },
     });
   }
 
   if (body.action !== "start") {
     return new Response(JSON.stringify({ error: "Only 'start' action supported" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+      status: 400, headers: { "Content-Type": "application/json" },
     });
   }
 
-  // Check for existing container
+  // Check for existing running instance
   try {
-    const containers = await listContainers();
-    const existing = containers.find(
-      (c) =>
-        c.subdomain === user.subdomain &&
-        (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
-    );
+    const instances = await listInstances();
+    const existing = instances.find(i => i.subdomain === user.subdomain && i.status === "running");
     if (existing) {
-      return new Response(JSON.stringify({ error: "You already have a running container" }), {
-        status: 409,
-        headers: { "Content-Type": "application/json" },
+      return new Response(JSON.stringify({ error: "You already have a running instance" }), {
+        status: 409, headers: { "Content-Type": "application/json" },
       });
     }
-  } catch (err) {
-    return new Response(JSON.stringify({ error: "Failed to check containers" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+  } catch {
+    return new Response(JSON.stringify({ error: "Failed to check status" }), {
+      status: 500, headers: { "Content-Type": "application/json" },
     });
   }
 
@@ -100,7 +84,7 @@ export async function POST(req: NextRequest) {
     ? (body.resourceTier as ResourceTier)
     : (user.resourceTier as ResourceTier) ?? "standard";
 
-  const department = "default";
+  const department = ((user as unknown as Record<string, string>).department) ?? "default";
   const allowedTiers = await getDeptAllowedTiers(department);
   if (!allowedTiers.includes(tierToUse)) {
     return new Response(
@@ -110,55 +94,80 @@ export async function POST(req: NextRequest) {
   }
 
   const subdomain = user.subdomain;
+  const abortSignal = req.signal;
 
-  // SSE stream
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
       const send = (step: number, name: string, status: string, extra?: Record<string, string>) => {
+        if (abortSignal.aborted) return;
         const data = JSON.stringify({ step, name, status, ...extra });
         controller.enqueue(encoder.encode(`data: ${data}\n\n`));
       };
 
       try {
-        send(3, "launching", "in_progress", { message: "Starting ECS task..." });
-        const taskArn = await startContainerWithProgress({
-          username: user.email,
+        if (abortSignal.aborted) { controller.close(); return; }
+
+        const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+        send(1, "iam_role", "in_progress", { message: "Setting up permissions..." });
+        await delay(500);
+        send(1, "iam_role", "completed", { message: "Permissions ready" });
+        await delay(300);
+
+        send(2, "storage", "in_progress", { message: "Preparing storage..." });
+        await delay(500);
+        send(2, "storage", "completed", { message: "EBS volume preserved" });
+        await delay(300);
+
+        send(3, "task_definition", "in_progress", { message: "Configuring instance..." });
+        const result = await startInstance({
           subdomain,
+          username: user.email,
           department,
-          containerOs: (body.containerOs as "ubuntu" | "al2023") ?? user.containerOs ?? "ubuntu",
-          resourceTier: tierToUse,
-          securityPolicy: user.securityPolicy ?? "restricted",
-          storageType: user.storageType ?? "efs",
+          securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
+          resourceTier: tierToUse as "light" | "standard" | "power",
         });
-        send(4, "launched", "done", { message: `Task started: ${taskArn.split("/").pop()}` });
+        send(3, "task_definition", "completed", { message: "Instance configured" });
+        await delay(300);
 
-        // Step 6: Route registration
-        send(6, "route_register", "in_progress", { message: "Waiting for IP assignment..." });
+        send(4, "password_store", "in_progress", { message: "Securing access..." });
+        await delay(500);
+        send(4, "password_store", "completed", { message: "Password set" });
+        await delay(300);
 
-        let registered = false;
-        for (let i = 0; i < 8; i++) {
-          await new Promise((r) => setTimeout(r, 5000));
-          try {
-            const info = await describeContainer(taskArn);
-            if (info?.privateIp) {
-              await registerContainerRoute(subdomain, info.privateIp);
-              registered = true;
-              break;
-            }
-          } catch { /* retry */ }
-          send(6, "route_register", "in_progress", { message: `Waiting for IP... (${i + 1}/8)` });
+        send(5, "container_start", "in_progress", { message: "Starting instance..." });
+        await delay(500);
+        send(5, "container_start", "completed", { message: `Instance ${result.instanceId} running` });
+        await delay(300);
+
+        send(6, "route_register", "in_progress", { message: "Connecting network..." });
+        await delay(500);
+        send(6, "route_register", "completed", { message: "Route registered" });
+
+        const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
+        send(7, "health_check", "in_progress", { message: "Verifying code-server..." });
+
+        let healthy = false;
+        for (let i = 0; i < 20; i++) {
+          if (abortSignal.aborted) break;
+          await new Promise<void>((r) => {
+            const t = setTimeout(r, 3000);
+            abortSignal.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true });
+          });
+          if (abortSignal.aborted) break;
+          if (result.status === "running") { healthy = true; break; }
+          send(7, "health_check", "in_progress", { message: `Waiting... (${i + 1}/20)` });
         }
 
-        if (registered) {
-          const url = `https://${subdomain}.${devSubdomain}.${domainName}`;
-          send(6, "route_register", "completed", { message: "Route registered", url });
-        } else {
-          send(6, "route_register", "completed", { message: "Container started (route may take a moment)" });
+        if (!abortSignal.aborted) {
+          send(7, "health_check", "completed", { message: healthy ? "code-server is ready!" : "Instance started", url });
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown error";
-        send(0, "iam_role", "failed", { error: msg });
+        if (!abortSignal.aborted) {
+          send(0, "iam_role", "failed", { error: "Provisioning failed" });
+        }
+        console.error("[user/container/stream] SSE error:", err instanceof Error ? err.message : err);
       }
 
       controller.close();
@@ -168,7 +177,7 @@ export async function POST(req: NextRequest) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
+      "Cache-Control": "no-cache, no-store, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },

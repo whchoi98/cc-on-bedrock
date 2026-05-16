@@ -10,56 +10,26 @@ import {
   ListUsersCommand,
   type AttributeType,
 } from "@aws-sdk/client-cognito-identity-provider";
-import {
-  ECSClient,
-  RunTaskCommand,
-  StopTaskCommand,
-  DescribeTasksCommand,
-  ListTasksCommand,
-  RegisterTaskDefinitionCommand,
-  DescribeTaskDefinitionCommand,
-} from "@aws-sdk/client-ecs";
-import {
-  DynamoDBClient,
-  PutItemCommand,
-  DeleteItemCommand,
-} from "@aws-sdk/client-dynamodb";
-import {
-  EFSClient,
-  CreateAccessPointCommand,
-  DescribeAccessPointsCommand,
-} from "@aws-sdk/client-efs";
 import type {
   CognitoUser,
   CreateUserInput,
   UpdateUserInput,
-  ContainerInfo,
-  StartContainerInput,
-  StopContainerInput,
 } from "./types";
 import {
-  IAMClient,
-  CreateRoleCommand,
-  PutRolePolicyCommand,
-  GetRoleCommand,
-} from "@aws-sdk/client-iam";
+  SecretsManagerClient,
+  CreateSecretCommand,
+  PutSecretValueCommand,
+  GetSecretValueCommand,
+} from "@aws-sdk/client-secrets-manager";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const userPoolId = process.env.COGNITO_USER_POOL_ID ?? "";
-const ecsCluster = process.env.ECS_CLUSTER_NAME ?? "cc-on-bedrock-cluster";
-const domainName = process.env.DOMAIN_NAME ?? "example.com";
+const domainName = process.env.DOMAIN_NAME ?? "atomai.click";
 const devSubdomain = process.env.DEV_SUBDOMAIN ?? "dev";
-const accountId = process.env.AWS_ACCOUNT_ID ?? "";
-const TASK_ROLE_PREFIX = "cc-on-bedrock-task";
+const MAX_COGNITO_PAGES = 20;
 
 const cognitoClient = new CognitoIdentityProviderClient({ region });
-const ecsClient = new ECSClient({ region });
-const dynamoClient = new DynamoDBClient({ region });
-const iamClient = new IAMClient({ region });
-const efsClient = new EFSClient({ region });
-
-const routingTableName = process.env.ROUTING_TABLE_NAME ?? "cc-routing-table";
-const efsFileSystemId = process.env.EFS_FILE_SYSTEM_ID ?? "";
+const secretsClient = new SecretsManagerClient({ region });
 
 // ─── Helper: Parse Cognito attributes ───
 
@@ -89,6 +59,7 @@ function toCognitoUser(user: {
     containerOs: (getAttr(attrs, "custom:container_os") as CognitoUser["containerOs"]) ?? "ubuntu",
     resourceTier: (getAttr(attrs, "custom:resource_tier") as CognitoUser["resourceTier"]) ?? "standard",
     securityPolicy: (getAttr(attrs, "custom:security_policy") as CognitoUser["securityPolicy"]) ?? "restricted",
+    storageType: (getAttr(attrs, "custom:storage_type") as CognitoUser["storageType"]) ?? "ebs",
     containerId: getAttr(attrs, "custom:container_id"),
     groups: [],
   };
@@ -97,13 +68,22 @@ function toCognitoUser(user: {
 // ─── Cognito: User CRUD ───
 
 export async function listCognitoUsers(): Promise<CognitoUser[]> {
-  const result = await cognitoClient.send(
-    new ListUsersCommand({
-      UserPoolId: userPoolId,
-      Limit: 60,
-    })
-  );
-  return (result.Users ?? []).map(toCognitoUser);
+  const allUsers: CognitoUser[] = [];
+  let paginationToken: string | undefined;
+  let pages = 0;
+  do {
+    const result = await cognitoClient.send(
+      new ListUsersCommand({
+        UserPoolId: userPoolId,
+        Limit: 60,
+        PaginationToken: paginationToken,
+      })
+    );
+    allUsers.push(...(result.Users ?? []).map(toCognitoUser));
+    paginationToken = result.PaginationToken;
+    pages++;
+  } while (paginationToken && pages < MAX_COGNITO_PAGES);
+  return allUsers;
 }
 
 export async function getCognitoUser(username: string): Promise<CognitoUser> {
@@ -125,10 +105,14 @@ export async function getCognitoUser(username: string): Promise<CognitoUser> {
 export async function createCognitoUser(
   input: CreateUserInput
 ): Promise<CognitoUser> {
+  // Generate initial temporary password for both Cognito and code-server
+  const tempPassword = require("crypto").randomBytes(12).toString("base64").slice(0, 16) + "A1!";
+
   const result = await cognitoClient.send(
     new AdminCreateUserCommand({
       UserPoolId: userPoolId,
       Username: input.email,
+      TemporaryPassword: tempPassword,
       UserAttributes: [
         { Name: "email", Value: input.email },
         { Name: "email_verified", Value: "true" },
@@ -137,10 +121,30 @@ export async function createCognitoUser(
         { Name: "custom:container_os", Value: input.containerOs },
         { Name: "custom:resource_tier", Value: input.resourceTier },
         { Name: "custom:security_policy", Value: input.securityPolicy },
+        { Name: "custom:storage_type", Value: input.storageType },
       ],
       DesiredDeliveryMediums: ["EMAIL"],
     })
   );
+
+  // Store initial password in Secrets Manager for code-server sync
+  const secretName = `cc-on-bedrock/codeserver/${input.subdomain}`;
+  try {
+    await secretsClient.send(new PutSecretValueCommand({
+      SecretId: secretName,
+      SecretString: tempPassword,
+    }));
+  } catch {
+    try {
+      await secretsClient.send(new CreateSecretCommand({
+        Name: secretName,
+        SecretString: tempPassword,
+        Description: `code-server password for ${input.subdomain}`,
+      }));
+    } catch (smErr) {
+      console.warn(`[createCognitoUser] Failed to store initial code-server password:`, smErr);
+    }
+  }
 
   // Add to 'user' group by default
   await cognitoClient.send(
@@ -172,6 +176,11 @@ export async function updateCognitoUser(
     attrs.push({
       Name: "custom:security_policy",
       Value: input.securityPolicy,
+    });
+  if (input.storageType)
+    attrs.push({
+      Name: "custom:storage_type",
+      Value: input.storageType,
     });
 
   if (attrs.length > 0) {
@@ -226,412 +235,77 @@ export async function enableCognitoUser(username: string): Promise<void> {
   );
 }
 
-// ─── ECS: Container Management ───
-
-const TASK_DEFINITION_MAP: Record<string, string> = {
-  "ubuntu-light": "devenv-ubuntu-light",
-  "ubuntu-standard": "devenv-ubuntu-standard",
-  "ubuntu-power": "devenv-ubuntu-power",
-  "al2023-light": "devenv-al2023-light",
-  "al2023-standard": "devenv-al2023-standard",
-  "al2023-power": "devenv-al2023-power",
-};
-
-// ─── Per-user IAM Role for budget control ───
-
-async function ensureUserTaskRole(subdomain: string): Promise<string> {
-  if (!accountId) {
-    throw new Error("AWS_ACCOUNT_ID environment variable is required for per-user IAM roles");
-  }
-  const roleName = `${TASK_ROLE_PREFIX}-${subdomain}`;
-  const roleArn = `arn:aws:iam::${accountId}:role/${roleName}`;
-
-  try {
-    await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
-    return roleArn; // Already exists
-  } catch {
-    // Create new per-user role
-  }
-
-  try {
-    await iamClient.send(new CreateRoleCommand({
-      RoleName: roleName,
-      AssumeRolePolicyDocument: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [{
-          Effect: "Allow",
-          Principal: { Service: "ecs-tasks.amazonaws.com" },
-          Action: "sts:AssumeRole",
-        }],
-      }),
-      Description: `Per-user ECS Task Role for ${subdomain}`,
-      Tags: [{ Key: "cc-on-bedrock", Value: "user-task-role" }, { Key: "subdomain", Value: subdomain }],
-    }));
-
-    // Attach Bedrock + basic permissions
-    await iamClient.send(new PutRolePolicyCommand({
-      RoleName: roleName,
-      PolicyName: "BedrockAccess",
-      PolicyDocument: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Effect: "Allow",
-            Action: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Converse", "bedrock:ConverseStream"],
-            Resource: [
-              "arn:aws:bedrock:*::foundation-model/anthropic.*",
-              `arn:aws:bedrock:*:${accountId}:inference-profile/*`,
-            ],
-          },
-          {
-            Effect: "Allow",
-            Action: ["s3:GetObject", "s3:PutObject"],
-            Resource: `arn:aws:s3:::cc-on-bedrock-*/*`,
-          },
-          {
-            Effect: "Allow",
-            Action: ["logs:CreateLogStream", "logs:PutLogEvents"],
-            Resource: "*",
-          },
-          {
-            Effect: "Allow",
-            Action: ["ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
-            Resource: "*",
-          },
-        ],
-      }),
-    }));
-
-    console.log(`[IAM] Created per-user role: ${roleName}`);
-    // Wait for IAM propagation
-    await new Promise((r) => setTimeout(r, 3000));
-    return roleArn;
-  } catch (err) {
-    console.error(`[IAM] Failed to create role ${roleName}:`, err);
-    // Fallback to shared role (accountId already validated above)
-    return `arn:aws:iam::${accountId}:role/cc-on-bedrock-ecs-task`;
-  }
-}
-
-// ─── EFS Access Point per-user isolation ───
-
-async function ensureEfsAccessPoint(subdomain: string): Promise<string> {
-  if (!efsFileSystemId) {
-    throw new Error("EFS_FILE_SYSTEM_ID environment variable is required for per-user EFS isolation");
-  }
-
-  // Check for existing access point
-  const existing = await efsClient.send(new DescribeAccessPointsCommand({
-    FileSystemId: efsFileSystemId,
-  }));
-  const found = existing.AccessPoints?.find(
-    (ap) => ap.Tags?.some((t) => t.Key === "subdomain" && t.Value === subdomain)
-  );
-  if (found?.AccessPointId) {
-    return found.AccessPointId;
-  }
-
-  // Create new access point with per-user root directory
-  const result = await efsClient.send(new CreateAccessPointCommand({
-    FileSystemId: efsFileSystemId,
-    PosixUser: { Uid: 1000, Gid: 1000 },
-    RootDirectory: {
-      Path: `/users/${subdomain}`,
-      CreationInfo: { OwnerUid: 1000, OwnerGid: 1000, Permissions: "755" },
-    },
-    Tags: [
-      { Key: "Name", Value: `cc-devenv-${subdomain}` },
-      { Key: "subdomain", Value: subdomain },
-      { Key: "cc-on-bedrock", Value: "user-efs-ap" },
-    ],
-  }));
-  console.log(`[EFS] Created access point ${result.AccessPointId} for ${subdomain}`);
-  return result.AccessPointId!;
-}
-
-async function registerUserTaskDefinition(
-  baseFamily: string,
+/**
+ * Soft-delete: remove user's container environment while keeping Cognito account.
+ * 1. Stop running container  2. Deregister Nginx route  3. Trigger EBS snapshot
+ * 4. Clear subdomain in Cognito  5. User can re-request after re-login.
+ */
+export async function resetUserEnvironment(
+  username: string,
   subdomain: string,
-  accessPointId: string,
-  userTaskRoleArn: string,
-): Promise<string> {
-  const userFamily = `devenv-user-${subdomain}`;
+): Promise<{ stopped: boolean; routeCleared: boolean }> {
+  const result = { stopped: false, routeCleared: false };
 
-  // Fetch the base task definition to clone its settings
-  const baseDef = await ecsClient.send(new DescribeTaskDefinitionCommand({
-    taskDefinition: baseFamily,
-  }));
-  const base = baseDef.taskDefinition;
-  if (!base) throw new Error(`Base task definition ${baseFamily} not found`);
-
-  // Register a new task definition with EFS access point
-  const result = await ecsClient.send(new RegisterTaskDefinitionCommand({
-    family: userFamily,
-    networkMode: base.networkMode,
-    taskRoleArn: userTaskRoleArn,
-    executionRoleArn: base.executionRoleArn,
-    containerDefinitions: base.containerDefinitions,
-    volumes: [{
-      name: "efs-workspace",
-      efsVolumeConfiguration: {
-        fileSystemId: efsFileSystemId,
-        transitEncryption: "ENABLED",
-        authorizationConfig: {
-          accessPointId,
-          iam: "ENABLED",
-        },
-      },
-    }],
-  }));
-
-  const family = result.taskDefinition?.taskDefinitionArn;
-  console.log(`[ECS] Registered user task def: ${family}`);
-  return family!;
-}
-
-const SECURITY_GROUP_MAP: Record<string, string> = {
-  open: process.env.SG_DEVENV_OPEN ?? "",
-  restricted: process.env.SG_DEVENV_RESTRICTED ?? "",
-  locked: process.env.SG_DEVENV_LOCKED ?? "",
-};
-
-export async function startContainer(
-  input: StartContainerInput
-): Promise<string> {
-  const taskDefKey = `${input.containerOs}-${input.resourceTier}`;
-  const taskDefinition = TASK_DEFINITION_MAP[taskDefKey];
-  if (!taskDefinition) {
-    throw new Error(`Invalid container config: ${taskDefKey}`);
+  // 1. Stop running EC2 instance
+  try {
+    const { stopInstance } = await import("@/lib/ec2-clients");
+    await stopInstance(subdomain, "Environment reset by admin");
+    result.stopped = true;
+  } catch (err) {
+    console.warn("[resetUserEnvironment] Failed to stop instance:", err);
   }
 
-  // Duplicate check: prevent multiple containers for the same user
-  const existing = await listContainers();
-  const userContainers = existing.filter(
-    (c) =>
-      (c.username === input.username || c.subdomain === input.subdomain) &&
-      (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
-  );
-  if (userContainers.length > 0) {
-    throw new Error(
-      `User "${input.username}" already has a running container (${userContainers[0].taskId}). Stop it first.`
-    );
+  // 2. Deregister Nginx route (DynamoDB cc-routing-table)
+  try {
+    await deregisterContainerRoute(subdomain);
+    result.routeCleared = true;
+  } catch (err) {
+    console.warn("[resetUserEnvironment] Failed to deregister route:", err);
   }
 
-  const securityGroup = SECURITY_GROUP_MAP[input.securityPolicy];
+  // 3. Clear subdomain in Cognito (user becomes "unassigned")
+  await updateCognitoUserAttribute(username, "custom:subdomain", "");
 
-  // Create or get per-user IAM Task Role for budget control
-  const userTaskRoleArn = await ensureUserTaskRole(input.subdomain);
-
-  // Per-user EFS isolation: create access point + register user-specific task def
-  let effectiveTaskDef = taskDefinition;
-  if (efsFileSystemId) {
-    const accessPointId = await ensureEfsAccessPoint(input.subdomain);
-    effectiveTaskDef = await registerUserTaskDefinition(
-      taskDefinition, input.subdomain, accessPointId, userTaskRoleArn,
-    );
-  }
-
-  const result = await ecsClient.send(
-    new RunTaskCommand({
-      cluster: ecsCluster,
-      taskDefinition: effectiveTaskDef,
-      count: 1,
-      launchType: "EC2",
-      enableExecuteCommand: true,
-      networkConfiguration: {
-        awsvpcConfiguration: {
-          subnets: (process.env.PRIVATE_SUBNET_IDS ?? "").split(","),
-          securityGroups: securityGroup ? [securityGroup] : [],
-          assignPublicIp: "DISABLED",
-        },
-      },
-      overrides: {
-        taskRoleArn: userTaskRoleArn,
-        containerOverrides: [
-          {
-            name: "devenv",
-            environment: [
-              { name: "SECURITY_POLICY", value: input.securityPolicy },
-              { name: "USER_SUBDOMAIN", value: input.subdomain },
-              { name: "CODESERVER_PASSWORD", value: process.env.CODESERVER_PASSWORD ?? crypto.randomUUID() },
-              { name: "AWS_DEFAULT_REGION", value: region },
-            ],
-          },
-        ],
-      },
-      tags: [
-        { key: "username", value: input.username },
-        { key: "subdomain", value: input.subdomain },
-        { key: "department", value: input.department },
-        { key: "domain", value: `${input.subdomain}.${devSubdomain}.${domainName}` },
-      ],
-    })
-  );
-
-  const taskArn = result.tasks?.[0]?.taskArn;
-  if (!taskArn) {
-    throw new Error("Failed to start container: no task ARN returned");
-  }
-  return taskArn;
+  return result;
 }
 
-// Alias for SSE streaming container start (used by /api/user/container/stream)
-export const startContainerWithProgress = startContainer;
+// ─── DynamoDB Routing Table ───
 
-export async function stopContainer(input: StopContainerInput): Promise<void> {
-  await ecsClient.send(
-    new StopTaskCommand({
-      cluster: ecsCluster,
-      task: input.taskArn,
-      reason: input.reason ?? "Stopped by dashboard admin",
-    })
-  );
-}
-
-export async function listContainers(): Promise<ContainerInfo[]> {
-  const listResult = await ecsClient.send(
-    new ListTasksCommand({
-      cluster: ecsCluster,
-      maxResults: 100,
-    })
-  );
-
-  const taskArns = listResult.taskArns ?? [];
-  if (taskArns.length === 0) return [];
-
-  const descResult = await ecsClient.send(
-    new DescribeTasksCommand({
-      cluster: ecsCluster,
-      tasks: taskArns,
-      include: ["TAGS"],
-    })
-  );
-
-  return (descResult.tasks ?? []).map((task) => {
-    const tags = task.tags ?? [];
-    const getTag = (key: string) =>
-      tags.find((t) => t.key === key)?.value ?? "";
-
-    const taskArnStr = task.taskArn ?? "";
-    const taskId = taskArnStr.split("/").pop() ?? taskArnStr;
-
-    // Extract OS and tier from task definition
-    const taskDef = task.taskDefinitionArn ?? "";
-    const taskDefName = taskDef.split("/").pop()?.split(":")[0] ?? "";
-    let containerOs: ContainerInfo["containerOs"] = "ubuntu";
-    let resourceTier: ContainerInfo["resourceTier"] = "standard";
-    if (taskDefName.includes("al2023")) containerOs = "al2023";
-    if (taskDefName.includes("light")) resourceTier = "light";
-    else if (taskDefName.includes("power")) resourceTier = "power";
-
-    return {
-      taskArn: taskArnStr,
-      taskId,
-      status: task.lastStatus ?? "UNKNOWN",
-      desiredStatus: task.desiredStatus ?? "UNKNOWN",
-      username: getTag("username"),
-      subdomain: getTag("subdomain"),
-      containerOs,
-      resourceTier,
-      securityPolicy: "restricted" as ContainerInfo["securityPolicy"],
-      cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
-      memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
-      createdAt: task.createdAt?.toISOString() ?? "",
-      startedAt: task.startedAt?.toISOString(),
-      stoppedAt: task.stoppedAt?.toISOString(),
-      healthStatus: task.healthStatus,
-      privateIp:
-        task.attachments
-          ?.find((a) => a.type === "ElasticNetworkInterface")
-          ?.details?.find((d) => d.name === "privateIPv4Address")?.value ??
-        undefined,
-    };
-  });
-}
-
-export async function describeContainer(
-  taskArn: string
-): Promise<ContainerInfo | null> {
-  const result = await ecsClient.send(
-    new DescribeTasksCommand({
-      cluster: ecsCluster,
-      tasks: [taskArn],
-      include: ["TAGS"],
-    })
-  );
-
-  const task = result.tasks?.[0];
-  if (!task) return null;
-
-  const tags = task.tags ?? [];
-  const getTag = (key: string) =>
-    tags.find((t) => t.key === key)?.value ?? "";
-
-  const taskArnStr = task.taskArn ?? "";
-  const taskId = taskArnStr.split("/").pop() ?? taskArnStr;
-
-  const taskDef = task.taskDefinitionArn ?? "";
-  const taskDefName = taskDef.split("/").pop()?.split(":")[0] ?? "";
-  let containerOs: ContainerInfo["containerOs"] = "ubuntu";
-  let resourceTier: ContainerInfo["resourceTier"] = "standard";
-  if (taskDefName.includes("al2023")) containerOs = "al2023";
-  if (taskDefName.includes("light")) resourceTier = "light";
-  else if (taskDefName.includes("power")) resourceTier = "power";
-
-  return {
-    taskArn: taskArnStr,
-    taskId,
-    status: task.lastStatus ?? "UNKNOWN",
-    desiredStatus: task.desiredStatus ?? "UNKNOWN",
-    username: getTag("username"),
-    subdomain: getTag("subdomain"),
-    containerOs,
-    resourceTier,
-    securityPolicy: "restricted",
-    cpu: task.cpu ?? task.containers?.[0]?.cpu?.toString() ?? ({ light: "1024", standard: "2048", power: "4096" }[resourceTier] || "0"),
-    memory: task.memory ?? task.containers?.[0]?.memory?.toString() ?? ({ light: "4096", standard: "8192", power: "12288" }[resourceTier] || "0"),
-    createdAt: task.createdAt?.toISOString() ?? "",
-    startedAt: task.startedAt?.toISOString(),
-    stoppedAt: task.stoppedAt?.toISOString(),
-    healthStatus: task.healthStatus,
-    privateIp:
-      task.attachments
-        ?.find((a) => a.type === "ElasticNetworkInterface")
-        ?.details?.find((d) => d.name === "privateIPv4Address")?.value ??
-      undefined,
-  };
-}
-
-// ─── DynamoDB Routing Table (replaces ALB listener rules) ───
-// Nginx polls S3 config generated from this table by nginx-config-gen Lambda
+const ROUTING_TABLE = process.env.ROUTING_TABLE ?? "cc-routing-table";
 
 export async function registerContainerRoute(
   subdomain: string,
   privateIp: string
 ): Promise<void> {
-  await dynamoClient.send(new PutItemCommand({
-    TableName: routingTableName,
+  const { DynamoDBClient, PutItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  await ddb.send(new PutItemCommand({
+    TableName: ROUTING_TABLE,
     Item: {
       subdomain: { S: subdomain },
-      container_ip: { S: privateIp },
+      targetIp: { S: privateIp },
       port: { N: "8080" },
       status: { S: "active" },
-      updated_at: { S: new Date().toISOString() },
+      updatedAt: { S: new Date().toISOString() },
+      domain: { S: `${subdomain}.${devSubdomain}.${domainName}` },
     },
   }));
-  console.log(`[Routing] Registered ${subdomain} → ${privateIp}:8080`);
+
+  console.log(`[Routing] Registered: ${subdomain} → ${privateIp}:8080`);
 }
 
 export async function deregisterContainerRoute(
   subdomain: string
 ): Promise<void> {
-  try {
-    await dynamoClient.send(new DeleteItemCommand({
-      TableName: routingTableName,
-      Key: { subdomain: { S: subdomain } },
-    }));
-    console.log(`[Routing] Deregistered ${subdomain}`);
-  } catch (err) {
-    console.warn(`[Routing] Deregister ${subdomain} failed:`, err);
-  }
+  const { DynamoDBClient, DeleteItemCommand } = await import("@aws-sdk/client-dynamodb");
+  const ddb = new DynamoDBClient({ region });
+
+  await ddb.send(new DeleteItemCommand({
+    TableName: ROUTING_TABLE,
+    Key: { subdomain: { S: subdomain } },
+  }));
+
+  console.log(`[Routing] Deregistered: ${subdomain}`);
 }
+

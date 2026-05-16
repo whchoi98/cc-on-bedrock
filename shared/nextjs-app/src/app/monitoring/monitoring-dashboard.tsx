@@ -22,35 +22,69 @@ interface SystemHealth {
   model_count: number;
 }
 
-interface ContainerMetrics {
-  cpuUtilized: number;
-  cpuReserved: number;
-  cpuUtilizationPct: number;
-  memoryUtilized: number;
-  memoryReserved: number;
-  memoryUtilizationPct: number;
-  networkRxBytes: number;
-  networkTxBytes: number;
-  storageReadBytes: number;
-  storageWriteBytes: number;
-  taskCount: number;
-  containerInstanceCount: number;
+interface Ec2Metrics {
+  avgCpu: number;
+  avgMemory: number;
+  totalNetworkRx: number;
+  totalNetworkTx: number;
+  instanceCount: number;
 }
 
-interface MetricsTimeSeries {
+interface Ec2TimeSeries {
   timestamps: string[];
-  cpuUtilized: number[];
-  memoryUtilized: number[];
+  cpu: number[];
+  memory: number[];
   networkRx: number[];
   networkTx: number[];
 }
 
-interface TaskDefMetrics {
-  taskDefFamily: string;
-  cpuUtilized: number;
-  cpuReserved: number;
-  memoryUtilized: number;
-  memoryReserved: number;
+interface InstanceMetricsRow {
+  instanceId: string;
+  subdomain: string;
+  username: string;
+  instanceType: string;
+  cpu: number;
+  memory: number;
+  networkRx: number;
+  networkTx: number;
+}
+
+interface BedrockMetricsSnapshot {
+  inputTokensToday: number;
+  outputTokensToday: number;
+  totalTokensToday: number;
+  invocationsToday: number;
+  avgLatencyMs: number;
+  estimatedCostToday: number;
+  tokensPerHour: number;
+  costPerHour: number;
+  hoursElapsed: number;
+}
+
+interface BedrockTsPoint {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  invocations: number;
+  estimatedCost: number;
+}
+
+type BedrockTsData = BedrockTsPoint[];
+
+// EC2 on-demand pricing (ap-northeast-2, Seoul)
+const EC2_PRICING: Record<string, number> = {
+  "m7g.4xlarge": 0.8208,  // 16 vCPU, 64 GiB
+  "m7g.2xlarge": 0.4104,  // 8 vCPU, 32 GiB
+  "t4g.xlarge": 0.1792,   // 4 vCPU, 16 GiB
+};
+const CLUSTER_INSTANCE_TYPE = "m7g.4xlarge";
+const DASHBOARD_INSTANCE_TYPE = "t4g.xlarge";
+
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(0);
 }
 
 function formatBytes(bytes: number): string {
@@ -79,29 +113,32 @@ function UtilizationBar({ label, used, total, unit, color }: {
 }
 
 export default function MonitoringDashboard({
-  domainName = "example.com",
+  domainName = "atomai.click",
   devSubdomain = "dev",
 }: MonitoringDashboardProps) {
   const { t, locale } = useI18n();
   const [healthStatuses, setHealthStatuses] = useState<HealthStatus[]>([]);
   const [filterUser, setFilterUser] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [filterDept, setFilterDept] = useState("all");
+  const [filterTier, setFilterTier] = useState("all");
   const [searchText, setSearchText] = useState("");
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
-  const [cwMetrics, setCwMetrics] = useState<ContainerMetrics | null>(null);
-  const [cwTimeSeries, setCwTimeSeries] = useState<MetricsTimeSeries | null>(null);
-  const [taskDefMetrics, setTaskDefMetrics] = useState<TaskDefMetrics[]>([]);
+  const [ec2Metrics, setEc2Metrics] = useState<Ec2Metrics | null>(null);
+  const [ec2TimeSeries, setEc2TimeSeries] = useState<Ec2TimeSeries | null>(null);
+  const [instanceMetrics, setInstanceMetrics] = useState<InstanceMetricsRow[]>([]);
+  const [bedrockMetrics, setBedrockMetrics] = useState<BedrockMetricsSnapshot | null>(null);
+  const [bedrockTimeSeries, setBedrockTimeSeries] = useState<BedrockTsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     try {
       const [healthRes, containersRes, sysRes] = await Promise.all([
         fetch("/api/health"),
         fetch("/api/containers"),
-        fetch("/api/litellm?action=system_health"),
+        fetch("/api/usage?action=system_health"),
       ]);
 
       const healthJson = (await healthRes.json()) as {
@@ -125,27 +162,45 @@ export default function MonitoringDashboard({
       const sysJson = (await sysRes.json()) as ApiResponse<SystemHealth>;
       setSystemHealth(sysJson.data ?? null);
 
-      // Container Insights - fetch separately to avoid blocking other data
+      // EC2 Instance Metrics - fetch separately to avoid blocking other data
       try {
-        const [cwRes, cwTsRes, tdRes] = await Promise.all([
+        const [ec2Res, ec2TsRes, instRes] = await Promise.all([
           fetch("/api/container-metrics?action=current"),
           fetch("/api/container-metrics?action=timeseries&hours=6"),
-          fetch("/api/container-metrics?action=taskdef"),
+          fetch("/api/container-metrics?action=instances"),
         ]);
-        if (cwRes.ok) {
-          const cwJson = (await cwRes.json()) as ApiResponse<ContainerMetrics>;
-          setCwMetrics(cwJson.data ?? null);
+        if (ec2Res.ok) {
+          const ec2Json = (await ec2Res.json()) as ApiResponse<Ec2Metrics>;
+          setEc2Metrics(ec2Json.data ?? null);
         }
-        if (cwTsRes.ok) {
-          const cwTsJson = (await cwTsRes.json()) as ApiResponse<MetricsTimeSeries>;
-          setCwTimeSeries(cwTsJson.data ?? null);
+        if (ec2TsRes.ok) {
+          const ec2TsJson = (await ec2TsRes.json()) as ApiResponse<Ec2TimeSeries>;
+          setEc2TimeSeries(ec2TsJson.data ?? null);
         }
-        if (tdRes.ok) {
-          const tdJson = (await tdRes.json()) as ApiResponse<TaskDefMetrics[]>;
-          setTaskDefMetrics(tdJson.data ?? []);
+        if (instRes.ok) {
+          const instJson = (await instRes.json()) as ApiResponse<InstanceMetricsRow[]>;
+          setInstanceMetrics(instJson.data ?? []);
         }
-      } catch (cwErr) {
-        console.error("Container Insights fetch failed:", cwErr);
+      } catch (ec2Err) {
+        console.error("EC2 metrics fetch failed:", ec2Err);
+      }
+
+      // Bedrock Usage metrics (DynamoDB — cc-on-bedrock project only)
+      try {
+        const [brRes, brTsRes] = await Promise.all([
+          fetch("/api/container-metrics?action=bedrock"),
+          fetch("/api/container-metrics?action=bedrock_timeseries&days=7"),
+        ]);
+        if (brRes.ok) {
+          const brJson = (await brRes.json()) as ApiResponse<BedrockMetricsSnapshot>;
+          setBedrockMetrics(brJson.data ?? null);
+        }
+        if (brTsRes.ok) {
+          const brTsJson = (await brTsRes.json()) as ApiResponse<BedrockTsData>;
+          setBedrockTimeSeries(brTsJson.data ?? null);
+        }
+      } catch (brErr) {
+        console.error("Bedrock metrics fetch failed:", brErr);
       }
 
       setLastRefresh(new Date());
@@ -183,7 +238,7 @@ export default function MonitoringDashboard({
   const totalServices = healthStatuses.length;
 
   const handleStopContainer = async (taskArn: string) => {
-    if (!confirm("Are you sure you want to stop this container?")) return;
+    if (!confirm("Are you sure you want to stop this instance?")) return;
     try {
       await fetch("/api/containers", {
         method: "DELETE",
@@ -239,7 +294,7 @@ export default function MonitoringDashboard({
       {/* Filters */}
       {containers.length > 0 && (
         <FilterBar
-          searchPlaceholder={locale === "ko" ? "사용자, 컨테이너 검색..." : "Search users, containers..."}
+          searchPlaceholder={locale === "ko" ? "사용자, 인스턴스 검색..." : "Search users, instances..."}
           searchValue={searchText}
           onSearchChange={setSearchText}
           filters={[
@@ -262,6 +317,28 @@ export default function MonitoringDashboard({
                 { value: "all", label: locale === "ko" ? "전체" : "All", count: containers.length },
                 { value: "RUNNING", label: "RUNNING", count: runningContainers.length },
                 { value: "PENDING", label: "PENDING", count: pendingContainers.length },
+              ],
+            },
+            {
+              key: "dept",
+              label: locale === "ko" ? "부서" : "Department",
+              value: filterDept,
+              onChange: setFilterDept,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All" },
+                ...[...new Set(containers.map((c) => c.department).filter((d): d is string => !!d))].sort().map((d) => ({ value: d, label: d })),
+              ],
+            },
+            {
+              key: "tier",
+              label: locale === "ko" ? "사이즈" : "Tier",
+              value: filterTier,
+              onChange: setFilterTier,
+              options: [
+                { value: "all", label: locale === "ko" ? "전체" : "All" },
+                { value: "light", label: "Light", count: containers.filter((c) => c.resourceTier === "light").length },
+                { value: "standard", label: "Standard", count: containers.filter((c) => c.resourceTier === "standard").length },
+                { value: "power", label: "Power", count: containers.filter((c) => c.resourceTier === "power").length },
               ],
             },
           ]}
@@ -298,6 +375,128 @@ export default function MonitoringDashboard({
             </>
           )}
         </div>
+      </section>
+
+      {/* Bedrock Usage */}
+      <section>
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">Bedrock Usage</h2>
+
+        {/* Stat Cards — DynamoDB-based, cc-on-bedrock project only */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Tokens Today</p>
+            <p className="text-2xl font-bold text-emerald-400">
+              {bedrockMetrics ? formatNumber(bedrockMetrics.totalTokensToday) : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              {bedrockMetrics ? `In ${formatNumber(bedrockMetrics.inputTokensToday)} · Out ${formatNumber(bedrockMetrics.outputTokensToday)}` : "No data"}
+            </p>
+          </div>
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Invocations Today</p>
+            <p className="text-2xl font-bold text-blue-400">
+              {bedrockMetrics ? formatNumber(bedrockMetrics.invocationsToday) : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              {bedrockMetrics ? `~${(bedrockMetrics.invocationsToday / Math.max(bedrockMetrics.hoursElapsed, 0.1)).toFixed(0)}/hr avg` : "Bedrock API calls"}
+            </p>
+          </div>
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Avg Latency</p>
+            <p className="text-2xl font-bold text-amber-400">
+              {bedrockMetrics && bedrockMetrics.avgLatencyMs > 0 ? `${(bedrockMetrics.avgLatencyMs / 1000).toFixed(1)}s` : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Response time</p>
+          </div>
+          <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Bedrock Cost Today</p>
+            <p className="text-2xl font-bold text-rose-400">
+              {bedrockMetrics ? `$${bedrockMetrics.estimatedCostToday.toFixed(2)}` : "-"}
+            </p>
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              {bedrockMetrics ? `~$${bedrockMetrics.costPerHour.toFixed(2)}/hr avg` : "Token usage cost"}
+            </p>
+          </div>
+        </div>
+
+        {/* Infrastructure Cost Breakdown */}
+        {(() => {
+          const devCount = ec2Metrics?.instanceCount ?? 0;
+          const devCostHr = devCount * (EC2_PRICING[CLUSTER_INSTANCE_TYPE] ?? 0);
+          const dashCostHr = EC2_PRICING[DASHBOARD_INSTANCE_TYPE] ?? 0;
+          const bedrockCostHr = bedrockMetrics?.costPerHour ?? 0;
+          const totalCostHr = bedrockCostHr + devCostHr + dashCostHr;
+          return (
+            <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium text-gray-300">Infrastructure Cost / hr</h3>
+                <span className="text-lg font-bold text-white">${totalCostHr.toFixed(2)}/hr</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Bedrock API</p>
+                  <p className="text-sm font-semibold text-rose-400">${bedrockCostHr.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-600">Token usage</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dev Instances</p>
+                  <p className="text-sm font-semibold text-cyan-400">${devCostHr.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-600">{devCount}× {CLUSTER_INSTANCE_TYPE}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider">Dashboard EC2</p>
+                  <p className="text-sm font-semibold text-purple-400">${dashCostHr.toFixed(2)}</p>
+                  <p className="text-[10px] text-gray-600">1× {DASHBOARD_INSTANCE_TYPE}</p>
+                </div>
+              </div>
+              {/* Cost bar */}
+              <div className="mt-3 h-2 bg-gray-800 rounded-full overflow-hidden flex">
+                {totalCostHr > 0 && (
+                  <>
+                    <div className="h-full bg-rose-500" style={{ width: `${(bedrockCostHr / totalCostHr) * 100}%` }} />
+                    <div className="h-full bg-cyan-500" style={{ width: `${(devCostHr / totalCostHr) * 100}%` }} />
+                    <div className="h-full bg-purple-500" style={{ width: `${(dashCostHr / totalCostHr) * 100}%` }} />
+                  </>
+                )}
+              </div>
+              <div className="flex gap-4 mt-1.5">
+                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />Bedrock</span>
+                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />Dev EC2</span>
+                <span className="text-[10px] text-gray-600 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-500 inline-block" />Dashboard</span>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Time Series Charts — daily from DynamoDB */}
+        {bedrockTimeSeries && bedrockTimeSeries.length > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <AreaTrendChart
+              data={bedrockTimeSeries.map((d) => ({
+                date: d.date.slice(5), // MM-DD
+                input: d.inputTokens,
+                output: d.outputTokens,
+              }))}
+              series={[
+                { key: "input", name: "Input Tokens", color: "#34d399" },
+                { key: "output", name: "Output Tokens", color: "#f472b6" },
+              ]}
+              title="Daily Token Usage (Last 7 days)"
+              height={220}
+            />
+            <AreaTrendChart
+              data={bedrockTimeSeries.map((d) => ({
+                date: d.date.slice(5), // MM-DD
+                cost: d.estimatedCost,
+              }))}
+              series={[
+                { key: "cost", name: "Daily Cost ($)", color: "#fb7185" },
+              ]}
+              title="Daily Bedrock Cost (Last 7 days)"
+              height={220}
+            />
+          </div>
+        )}
       </section>
 
       {/* Resource Insights */}
@@ -378,66 +577,66 @@ export default function MonitoringDashboard({
         </section>
       )}
 
-      {/* Container Insights - Cluster Utilization */}
-      {cwMetrics && (
+      {/* Instance Metrics - EC2 Utilization */}
+      {ec2Metrics && (
         <section>
-          <h2 className="text-lg font-semibold text-gray-100 mb-4">Container Insights</h2>
+          <h2 className="text-lg font-semibold text-gray-100 mb-4">Instance Metrics</h2>
 
           {/* Utilization Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">CPU Utilization</p>
-              <p className={`text-2xl font-bold ${cwMetrics.cpuUtilizationPct > 80 ? "text-red-400" : cwMetrics.cpuUtilizationPct > 60 ? "text-yellow-400" : "text-green-400"}`}>
-                {cwMetrics.cpuUtilizationPct.toFixed(1)}%
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Avg CPU</p>
+              <p className={`text-2xl font-bold ${ec2Metrics.avgCpu > 80 ? "text-red-400" : ec2Metrics.avgCpu > 60 ? "text-yellow-400" : "text-green-400"}`}>
+                {ec2Metrics.avgCpu.toFixed(1)}%
               </p>
-              <p className="text-[10px] text-gray-600 mt-0.5">{cwMetrics.cpuUtilized.toFixed(0)} / {cwMetrics.cpuReserved.toFixed(0)} CPU units</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">{ec2Metrics.instanceCount} instances</p>
             </div>
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Memory Utilization</p>
-              <p className={`text-2xl font-bold ${cwMetrics.memoryUtilizationPct > 80 ? "text-red-400" : cwMetrics.memoryUtilizationPct > 60 ? "text-yellow-400" : "text-green-400"}`}>
-                {cwMetrics.memoryUtilizationPct.toFixed(1)}%
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Avg Memory</p>
+              <p className={`text-2xl font-bold ${ec2Metrics.avgMemory > 80 ? "text-red-400" : ec2Metrics.avgMemory > 60 ? "text-yellow-400" : "text-green-400"}`}>
+                {ec2Metrics.avgMemory.toFixed(1)}%
               </p>
-              <p className="text-[10px] text-gray-600 mt-0.5">{cwMetrics.memoryUtilized.toFixed(0)} / {cwMetrics.memoryReserved.toFixed(0)} MiB</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">CWAgent mem_used_percent</p>
             </div>
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
               <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Network I/O</p>
-              <p className="text-lg font-bold text-cyan-400">↓{formatBytes(cwMetrics.networkRxBytes)}</p>
-              <p className="text-lg font-bold text-purple-400">↑{formatBytes(cwMetrics.networkTxBytes)}</p>
+              <p className="text-lg font-bold text-cyan-400">↓{formatBytes(ec2Metrics.totalNetworkRx)}</p>
+              <p className="text-lg font-bold text-purple-400">↑{formatBytes(ec2Metrics.totalNetworkTx)}</p>
             </div>
             <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5">
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Storage I/O</p>
-              <p className="text-lg font-bold text-blue-400">R: {formatBytes(cwMetrics.storageReadBytes)}</p>
-              <p className="text-lg font-bold text-amber-400">W: {formatBytes(cwMetrics.storageWriteBytes)}</p>
+              <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Instances</p>
+              <p className="text-2xl font-bold text-blue-400">{ec2Metrics.instanceCount}</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">Running dev envs</p>
             </div>
           </div>
 
           {/* Utilization Bars */}
           <div className="bg-[#161b22] rounded-xl border border-gray-800 p-5 mb-4 space-y-4">
-            <UtilizationBar label="CPU" used={cwMetrics.cpuUtilized} total={cwMetrics.cpuReserved} unit="units" color="bg-cyan-500" />
-            <UtilizationBar label="Memory" used={cwMetrics.memoryUtilized} total={cwMetrics.memoryReserved} unit="MiB" color="bg-purple-500" />
+            <UtilizationBar label="CPU" used={ec2Metrics.avgCpu} total={100} unit="%" color="bg-cyan-500" />
+            <UtilizationBar label="Memory" used={ec2Metrics.avgMemory} total={100} unit="%" color="bg-purple-500" />
           </div>
 
           {/* Time Series Charts */}
-          {cwTimeSeries && cwTimeSeries.timestamps.length > 0 && (
+          {ec2TimeSeries && ec2TimeSeries.timestamps.length > 0 && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
               <AreaTrendChart
-                data={cwTimeSeries.timestamps.map((ts, i) => ({
+                data={ec2TimeSeries.timestamps.map((ts, i) => ({
                   date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-                  cpu: cwTimeSeries.cpuUtilized[i] ?? 0,
-                  memory: cwTimeSeries.memoryUtilized[i] ?? 0,
+                  cpu: ec2TimeSeries.cpu[i] ?? 0,
+                  memory: ec2TimeSeries.memory[i] ?? 0,
                 }))}
                 series={[
-                  { key: "cpu", name: "CPU (units)", color: "#06b6d4" },
-                  { key: "memory", name: "Memory (MiB)", color: "#a855f7" },
+                  { key: "cpu", name: "CPU %", color: "#06b6d4" },
+                  { key: "memory", name: "Memory %", color: "#a855f7" },
                 ]}
                 title="CPU & Memory (Last 6h)"
                 height={220}
               />
               <AreaTrendChart
-                data={cwTimeSeries.timestamps.map((ts, i) => ({
+                data={ec2TimeSeries.timestamps.map((ts, i) => ({
                   date: new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-                  rx: (cwTimeSeries.networkRx[i] ?? 0) / 1024,
-                  tx: (cwTimeSeries.networkTx[i] ?? 0) / 1024,
+                  rx: (ec2TimeSeries.networkRx[i] ?? 0) / 1024,
+                  tx: (ec2TimeSeries.networkTx[i] ?? 0) / 1024,
                 }))}
                 series={[
                   { key: "rx", name: "Network Rx (KiB)", color: "#06b6d4" },
@@ -449,53 +648,47 @@ export default function MonitoringDashboard({
             </div>
           )}
 
-          {/* Per-TaskDef Metrics */}
-          {taskDefMetrics.length > 0 && (
+          {/* Per-Instance Metrics */}
+          {instanceMetrics.length > 0 && (
             <div className="bg-[#161b22] rounded-xl border border-gray-800 overflow-hidden">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-800 bg-[#0a0f1a]">
-                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Task Definition</th>
-                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">CPU Used</th>
-                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">CPU Reserved</th>
+                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">User</th>
+                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Instance Type</th>
                     <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">CPU %</th>
-                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Mem Used</th>
-                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Mem Reserved</th>
-                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Mem %</th>
+                    <th className="px-4 py-2.5 text-left text-[10px] font-medium text-gray-500 uppercase">Memory %</th>
+                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Net Rx</th>
+                    <th className="px-4 py-2.5 text-right text-[10px] font-medium text-gray-500 uppercase">Net Tx</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800/50">
-                  {taskDefMetrics.map((td) => {
-                    const cpuPct = td.cpuReserved > 0 ? (td.cpuUtilized / td.cpuReserved) * 100 : 0;
-                    const memPct = td.memoryReserved > 0 ? (td.memoryUtilized / td.memoryReserved) * 100 : 0;
-                    return (
-                      <tr key={td.taskDefFamily} className="hover:bg-gray-800/30 transition-colors">
-                        <td className="px-4 py-2.5 text-sm text-gray-200 font-medium">
-                          {td.taskDefFamily.replace("devenv-", "")}
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.cpuUtilized.toFixed(1)}</td>
-                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.cpuReserved.toFixed(0)}</td>
-                        <td className="px-4 py-2.5">
-                          <div className="flex items-center gap-2">
-                            <div className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${cpuPct > 80 ? "bg-red-500" : "bg-cyan-500"}`} style={{ width: `${Math.min(cpuPct, 100)}%` }} />
-                            </div>
-                            <span className="text-[10px] text-gray-500">{cpuPct.toFixed(0)}%</span>
+                  {instanceMetrics.map((inst) => (
+                    <tr key={inst.instanceId} className="hover:bg-gray-800/30 transition-colors">
+                      <td className="px-4 py-2.5 text-sm text-gray-200 font-medium">
+                        {inst.username || inst.subdomain}
+                      </td>
+                      <td className="px-4 py-2.5 text-sm text-gray-400">{inst.instanceType}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${inst.cpu > 80 ? "bg-red-500" : "bg-cyan-500"}`} style={{ width: `${Math.min(inst.cpu, 100)}%` }} />
                           </div>
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.memoryUtilized.toFixed(0)}</td>
-                        <td className="px-4 py-2.5 text-right text-sm text-gray-400">{td.memoryReserved.toFixed(0)}</td>
-                        <td className="px-4 py-2.5">
-                          <div className="flex items-center gap-2">
-                            <div className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${memPct > 80 ? "bg-red-500" : "bg-purple-500"}`} style={{ width: `${Math.min(memPct, 100)}%` }} />
-                            </div>
-                            <span className="text-[10px] text-gray-500">{memPct.toFixed(0)}%</span>
+                          <span className="text-[10px] text-gray-500">{inst.cpu.toFixed(0)}%</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${inst.memory > 80 ? "bg-red-500" : "bg-purple-500"}`} style={{ width: `${Math.min(inst.memory, 100)}%` }} />
                           </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          <span className="text-[10px] text-gray-500">{inst.memory.toFixed(0)}%</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-sm text-gray-400">{formatBytes(inst.networkRx)}</td>
+                      <td className="px-4 py-2.5 text-right text-sm text-gray-400">{formatBytes(inst.networkTx)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -510,6 +703,8 @@ export default function MonitoringDashboard({
           containers={containers.filter((c) => {
             if (filterUser !== "all" && (c.username || c.subdomain) !== filterUser) return false;
             if (filterStatus !== "all" && c.status !== filterStatus) return false;
+            if (filterDept !== "all" && c.department !== filterDept) return false;
+            if (filterTier !== "all" && c.resourceTier !== filterTier) return false;
             if (searchText && !(c.username || "").toLowerCase().includes(searchText.toLowerCase()) && !(c.subdomain || "").toLowerCase().includes(searchText.toLowerCase())) return false;
             return true;
           })}

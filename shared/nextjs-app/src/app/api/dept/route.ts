@@ -108,11 +108,9 @@ export async function GET(req: NextRequest) {
     let pendingRequests: PendingRequest[] = [];
     try {
       const requestsResult = await dynamodb.send(
-        new QueryCommand({
+        new ScanCommand({
           TableName: APPROVAL_REQUESTS_TABLE,
-          IndexName: "status-index",
-          KeyConditionExpression: "#status = :pending",
-          ...(department !== "all" ? { FilterExpression: "department = :dept", } : {}),
+          FilterExpression: "#status = :pending" + (department === "all" ? "" : " AND department = :dept"),
           ExpressionAttributeNames: {
             "#status": "status",
           },

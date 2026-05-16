@@ -6,12 +6,10 @@
  * Dashboard uses /api/ai (Converse API direct) for faster streaming.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import {
   BedrockAgentCoreClient,
   InvokeAgentRuntimeCommand,
 } from "@aws-sdk/client-bedrock-agentcore";
-import { authOptions } from "@/lib/auth";
 
 const region = process.env.AWS_REGION ?? "ap-northeast-2";
 const RUNTIME_ARN = process.env.AGENTCORE_RUNTIME_ARN ?? "";
@@ -22,12 +20,13 @@ function getClient() {
 }
 
 export async function POST(req: NextRequest) {
-  // Session auth (dashboard) OR API key auth (external clients like Slack)
-  const session = await getServerSession(authOptions);
+  // Accept API key or session auth
   const authHeader = req.headers.get("authorization");
   const apiKey = process.env.RUNTIME_API_KEY;
-
-  if (!session?.user && !(apiKey && authHeader === `Bearer ${apiKey}`)) {
+  if (!apiKey) {
+    return NextResponse.json({ error: "RUNTIME_API_KEY not configured" }, { status: 403 });
+  }
+  if (authHeader !== `Bearer ${apiKey}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

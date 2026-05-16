@@ -1,68 +1,71 @@
-# Security and Architectural Review: CC-on-Bedrock
+YOLO mode is enabled. All tool calls will be automatically approved.
+YOLO mode is enabled. All tool calls will be automatically approved.
+I will start by checking the uncommitted changes to understand the scope and nature of the migration and any other modifications.
+I will list the files in the `agent` and `cdk/lib` directories to identify the core components of the usage tracking system.
+I will also list the contents of the `agent/lambda` directory to find any Lambda functions related to usage tracking.
+I will now list the files in the `cdk/lib` directory to understand how the usage tracking infrastructure is defined.
+I will examine the uncommitted changes in `cdk/lib/03-usage-tracking-stack.ts` to understand the architectural shift from CloudWatch to DynamoDB for usage tracking.
+I will run `git status` to see which files have uncommitted changes and determine the scope of my review.
+I will check the diff for `shared/nextjs-app/src/lib/usage-client.ts` to see how usage data is now being retrieved and whether it aligns with the migration to DynamoDB.
+I will read the beginning of `shared/nextjs-app/src/lib/usage-client.ts` to see how `getUsageRecords` and `getDailyUsage` are implemented and where they get their data from.
+I will now examine the changes in `shared/nextjs-app/src/app/api/container-metrics/route.ts` to see if there are any related security or architectural issues.
+I will read more of `shared/nextjs-app/src/lib/usage-client.ts` starting from line 151 to understand the implementation of the `ScanCommand` and whether there are any optimizations for department-based queries.
+I will examine the DynamoDB table definition in `cdk/lib/03-usage-tracking-stack.ts` to see if there are any Global Secondary Indices (GSIs) that could optimize date-based queries and address the performance concerns with `ScanCommand`.
+I will check the implementation of the `usage-tracker` Lambda function, specifically looking at the `bedrock-usage-tracker.py` file in the `cdk/lib/lambda` directory, to understand how it writes usage data to DynamoDB.
+I will read `cdk/lib/lambda/bedrock-usage-tracker.py` to understand how usage data is processed and stored in DynamoDB.
+I will examine the changes in `shared/nextjs-app/src/lib/cloudwatch-client.ts` to see how it has been modified during the migration and if there are any remaining dependencies on CloudWatch for Bedrock metrics.
+I will examine the session and authorization checks in `shared/nextjs-app/src/app/api/container-metrics/route.ts` to see if there are any security risks related to data exposure.
+I will read `shared/nextjs-app/src/app/monitoring/monitoring-dashboard.tsx` to see how the dashboard is implemented and how it uses the metrics data.
+I will check the diff for `docs/architecture.md` to see if the architectural changes are properly documented and if there are any further insights into the migration.
+I will read the untracked `shared/nextjs-app/DESIGN.md` file to see if it contains any relevant design decisions or information about the usage tracking migration.
+I will read the remaining part of `shared/nextjs-app/src/lib/usage-client.ts` starting from line 301 to check the implementation of `getTotalUsage` and other remaining functions.
+I will check the diff for `CHANGELOG.md` and `CLAUDE.md` to see if there are any other important changes or updates I should be aware of.
+This code review focuses on the architectural shift from CloudWatch metrics to DynamoDB-based usage tracking, security in the dashboard API, performance at scale (4000+ users), and code quality of the recent changes.
 
-This report outlines the security and architectural findings for the CC-on-Bedrock project, conducted by Gemini.
+## Architectural Review: CC-on-Bedrock Usage Tracking Migration
 
-## Summary Table
+### 1. Architecture Soundness
+*   **Per-Project Tracking (Positive)**: Moving from `AWS/Bedrock` CloudWatch metrics to a custom DynamoDB pipeline is a significant improvement. CloudWatch metrics are account-wide, making it impossible to distinguish `cc-on-bedrock` usage from other projects in the same AWS account. The new pipeline correctly filters by IAM role prefix (`cc-on-bedrock-task-*`).
+*   **Atomic Aggregation (Positive)**: The `bedrock-usage-tracker.py` Lambda uses DynamoDB `ADD` expressions in `UpdateItem`, ensuring atomic increments and preventing race conditions during concurrent invocations.
+*   **Dual-Source Reliability (Positive)**: Using both Bedrock Invocation Logging (for token counts) and CloudTrail (as a fallback/request counter) provides robust data collection.
+*   **Sync Risk (Medium)**: `bedrock-usage-tracker.py` performs two separate `update_item` calls (one for `USER#` and one for `DEPT#`). If the Lambda fails or is throttled between these calls, the user and department totals will become out of sync. 
+    *   *Recommendation*: Wrap these in a `transact_write_items` call to ensure both or neither are updated.
 
-| ID | Finding | Severity | Category |
-|:---|:---|:---|:---|
-| 01 | Cross-User Data Access via Shared UID/EFS | **Critical** | Data Isolation |
-| 02 | ALB Open to `0.0.0.0/0` on Port 80 | **High** | Network Security |
-| 03 | Missing CloudFront Origin Secret Enforcement | **High** | Infrastructure Security |
-| 04 | Permissive IAM Wildcard Permissions (Bedrock) | **High** | IAM |
-| 05 | Hardcoded Environment-Specific Values | **Medium** | Configuration |
-| 06 | Ineffective DLP Restricted Security Group | **Medium** | DLP / Data Exfiltration |
-| 07 | Containers Running as Root | **Medium** | Container Security |
-| 08 | Unencrypted CloudFront-to-ALB Communication | **Low** | Encryption in Transit |
+### 2. Security
+*   **Admin Access Enforcement (Positive)**: `shared/nextjs-app/src/app/api/container-metrics/route.ts` correctly verifies `session?.user?.isAdmin` before processing any metrics requests.
+*   **Data Privacy (Positive)**: Setting `textDataDeliveryEnabled: false` in the Bedrock logging configuration (via CDK) is a critical security and cost-saving measure. It prevents logging full prompt/response text while still allowing metadata (tokens, model, identity) to be tracked.
+*   **Input Validation (Medium)**: While the API is restricted to admins, the `getUsageRecords` function in `usage-client.ts` accepts `userId` and `department` parameters that are directly used in DynamoDB expressions. 
+    *   *Recommendation*: Ensure strict validation of these parameters to prevent potential NoSQL injection or unauthorized data traversal.
+
+### 3. Performance & Scaling
+*   **Inefficient Scan Pattern (Critical)**: `shared/nextjs-app/src/lib/usage-client.ts` relies on `ScanCommand` for project-wide summaries (when `userId` is not provided). 
+    *   **Scale Risk**: With the target of 4000 users, a full table scan will quickly become a performance bottleneck and a cost driver. Even with a `FilterExpression`, DynamoDB charges for the total number of items scanned, not just those returned.
+    *   **Truncation Risk**: `MAX_PAGES = 100` in `usage-client.ts` will silently truncate results once the table grows beyond ~100MB. This will lead to incorrect dashboard metrics (e.g., "Total Tokens" showing a lower-than-actual value) without any error or warning.
+    *   *Recommendation*: Implement a `GLOBAL#ALL` partition or query the `DEPT#` partitions instead of scanning all `USER#` records. The dashboard currently aggregates user records in JavaScript, which is highly inefficient at scale.
+
+### 4. Cost Optimization
+*   **CloudWatch Savings (Positive)**: Removing `GetMetricData` calls and disabling full-text logging significantly reduces CloudWatch costs.
+*   **DynamoDB Cost (High)**: The linear growth of `Scan` costs as history accumulates will eventually offset the CloudWatch savings. 
+    *   *Recommendation*: Add a Global Secondary Index (GSI) with a constant partition key (e.g., `GSI_PK = "PROJECT"`) and `date` as the sort key to allow efficient, paginated queries of daily aggregates.
+
+### 5. Code Quality
+*   **Dead Code Cleanup (Positive)**: The removal of unused Bedrock metric functions from `cloudwatch-client.ts` keeps the codebase clean.
+*   **Type Safety (Positive)**: Good use of TypeScript interfaces for usage records and snapshots ensures consistency between the backend client and the frontend dashboard.
+*   **In-Memory Caching (Low)**: `bedrock-usage-tracker.py` uses simple dictionary caches for IAM and Cognito lookups. While effective for a single Lambda execution, these are lost on cold starts.
+    *   *Recommendation*: For 4000 users, consider a short-lived cache in ElastiCache or increase the Lambda's provisioned concurrency to maintain warm instances.
 
 ---
 
-## Findings Detail
+## Summary of Findings
 
-### 01. Cross-User Data Access via Shared UID/EFS
-*   **Severity**: **Critical**
-*   **Location**: `docker/devenv/scripts/entrypoint.sh`, `cdk/lib/04-ecs-devenv-stack.ts`
-*   **Description**: All dev environment containers share the same EFS file system and use the same UID (`coder`) for the `code-server` process. While the entrypoint creates subdirectories per user (`/home/coder/users/{subdomain}`), there is no technical enforcement (UID/GID isolation or EFS Access Points) preventing a user from using the terminal to access, modify, or delete files belonging to other users on the shared mount.
-*   **Recommendation**: Use **AWS EFS Access Points** with forced POSIX identities (different UID per user) and set the `rootDirectory` dynamically in the ECS Task Definition at runtime.
+| ID | Finding | Severity | Category |
+|:---|:---|:---|:---|
+| 01 | **Inefficient Scan for Global Metrics** | **Critical** | Performance |
+| 02 | **Silent Data Truncation (`MAX_PAGES`)** | **High** | Code Quality |
+| 03 | **Potential User/Dept Data Desync** | **Medium** | Consistency |
+| 04 | **Lack of Global Aggregate Partition** | **Medium** | Architecture |
 
-### 02. ALB Open to `0.0.0.0/0` on Port 80
-*   **Severity**: **High**
-*   **Location**: `cdk/lib/04-ecs-devenv-stack.ts` (Line 251)
-*   **Description**: The security group for the DevEnv ALB explicitly allows ingress on port 80 from `anyIpv4()`. This exposes the ALB directly to the internet, allowing attackers to bypass CloudFront security controls (e.g., WAF, Geo-blocking).
-*   **Recommendation**: Restrict port 80/443 ingress to the CloudFront Managed Prefix List (`pl-22a6434b` for `ap-northeast-2`).
-
-### 03. Missing CloudFront Origin Secret Enforcement
-*   **Severity**: **High**
-*   **Location**: `cdk/lib/04-ecs-devenv-stack.ts`
-*   **Description**: Unlike the Dashboard stack, the DevEnv stack does not implement or enforce a custom header (e.g., `X-Custom-Secret`) check on the ALB. This allows anyone who discovers the ALB DNS name to access the development environments directly without passing through CloudFront.
-*   **Recommendation**: Implement a Listener Rule on the ALB that only forwards traffic containing the correct `X-Custom-Secret` header, and return a 403 for all other requests.
-
-### 04. Permissive IAM Wildcard Permissions (Bedrock)
-*   **Severity**: **High**
-*   **Location**: `cdk/lib/05-dashboard-stack.ts` (Lines 48-70), `cdk/lib/04-ecs-devenv-stack.ts` (Line 158)
-*   **Description**: Multiple IAM roles (Dashboard EC2 Role, ECS Instance Role) are granted `bedrock:InvokeModel` with `Resource: "*"`. This violates the principle of least privilege.
-*   **Recommendation**: Restrict the `Resource` ARN to the specific Claude 3.5/3.0 model ARNs required for the application.
-
-### 05. Hardcoded Environment-Specific Values
-*   **Severity**: **Medium**
-*   **Location**: Multiple files (e.g., `shared/nextjs-app/src/lib/aws-clients.ts`, `cdk/lib/05-dashboard-stack.ts`)
-*   **Description**: AWS Account ID `061525506239` and region `ap-northeast-2` are hardcoded as defaults or explicitly in infrastructure and application code. This makes the project difficult to deploy in other environments and leaks infrastructure details.
-*   **Recommendation**: Parameterize these values using CDK/Terraform variables and inject them via Environment Variables at runtime.
-
-### 06. Ineffective DLP Restricted Security Group
-*   **Severity**: **Medium**
-*   **Location**: `cdk/lib/04-ecs-devenv-stack.ts` (Line 114)
-*   **Description**: The "Restricted" security group allows all outbound HTTPS traffic (`0.0.0.0/0:443`). Since most modern data exfiltration occurs over HTTPS, this rule does not provide meaningful data loss prevention.
-*   **Recommendation**: Use a proper whitelist of IP ranges or leverage **AWS Network Firewall** / **Route 53 Resolver DNS Firewall** for domain-level egress control.
-
-### 07. Containers Running as Root
-*   **Severity**: **Medium**
-*   **Location**: `agent/Dockerfile`, `docker/litellm/Dockerfile`
-*   **Description**: Several containers do not specify a non-root `USER` in their Dockerfiles. If an attacker gains shell access or exploits a vulnerability in the application (especially in the Bedrock Agent), they will have root privileges within the container.
-*   **Recommendation**: Create a non-privileged user (e.g., `appuser`) and use the `USER` instruction in the Dockerfile.
-
-### 08. Unencrypted CloudFront-to-ALB Communication
-*   **Severity**: **Low**
-*   **Location**: `cdk/lib/04-ecs-devenv-stack.ts` (Line 280)
-*   **Description**: The CloudFront distribution for the dev environment is configured to use `HTTP_ONLY` when communicating with the ALB origin. This means traffic is unencrypted while traversing the AWS network.
-*   **Recommendation**: Use `HTTPS_ONLY` for the Origin Protocol Policy and ensure the ALB has a valid ACM certificate.
+### Priority Action Items:
+1.  **Refactor `getUsageRecords`**: Replace the `ScanCommand` for project-wide summaries with a GSI-based `QueryCommand`.
+2.  **Use Department Aggregates**: Update the dashboard client to fetch pre-aggregated `DEPT#` records instead of summing individual `USER#` records in the browser.
+3.  **Atomic Transactions**: Use `transact_write_items` in the usage tracker Lambda to keep user and department data perfectly in sync.

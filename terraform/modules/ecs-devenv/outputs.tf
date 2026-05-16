@@ -18,17 +18,11 @@ output "cloudfront_distribution_id" {
   value = aws_cloudfront_distribution.this.id
 }
 
-output "nlb_dns" {
-  value = aws_lb.nlb.dns_name
-}
-
-output "routing_table_name" {
-  value = aws_dynamodb_table.routing.name
-}
-
-output "nginx_config_bucket" {
-  value = aws_s3_bucket.nginx_config.id
-}
+# nlb_dns / routing_table_name / nginx_config_bucket outputs removed: the underlying
+# resources (aws_lb.nlb, aws_dynamodb_table.routing, aws_s3_bucket.nginx_config) live
+# only in the CDK stack today (see terraform/CLAUDE.md "Drift vs CDK" — Nginx routing
+# and Usage Tracking aren't ported yet). Removing the dangling refs fixes
+# `terraform validate`. To restore them, port the corresponding CDK resources first.
 
 output "ecr_repository_url" {
   value = aws_ecr_repository.devenv.repository_url
@@ -44,4 +38,20 @@ output "dlp_sg_restricted_id" {
 
 output "dlp_sg_locked_id" {
   value = aws_security_group.dlp_locked.id
+}
+
+output "user_data_bucket_name" {
+  value = aws_s3_bucket.user_data.id
+}
+
+output "user_data_bucket_arn" {
+  value = aws_s3_bucket.user_data.arn
+}
+
+output "user_volumes_table_name" {
+  value = aws_dynamodb_table.user_volumes.name
+}
+
+output "user_volumes_table_arn" {
+  value = aws_dynamodb_table.user_volumes.arn
 }

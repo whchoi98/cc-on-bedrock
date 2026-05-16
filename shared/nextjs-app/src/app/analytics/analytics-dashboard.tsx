@@ -308,16 +308,16 @@ export default function AnalyticsDashboard({
 
     try {
       const fetches: Promise<Response | null>[] = [
-        fetch(`/api/litellm?action=spend_logs&start_date=${start}&end_date=${end}`),
+        fetch(`/api/usage?action=spend_logs&start_date=${start}&end_date=${end}`),
       ];
 
       if (isAdmin) {
         fetches.push(
-          fetch(`/api/litellm?action=model_metrics&start_date=${start}&end_date=${end}`),
-          fetch("/api/litellm?action=key_spend_list"),
-          fetch("/api/litellm?action=system_health"),
-          fetch(`/api/litellm?action=department_summaries&start_date=${start}&end_date=${end}`),
-          fetch(`/api/litellm?action=user_summaries&start_date=${start}&end_date=${end}`),
+          fetch(`/api/usage?action=model_metrics&start_date=${start}&end_date=${end}`),
+          fetch("/api/usage?action=key_spend_list"),
+          fetch("/api/usage?action=system_health"),
+          fetch(`/api/usage?action=department_summaries&start_date=${start}&end_date=${end}`),
+          fetch(`/api/usage?action=user_summaries&start_date=${start}&end_date=${end}`),
         );
       }
 

@@ -1,0 +1,151 @@
+name: Deploy Dashboard (ECR Build → ECS Deploy)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'shared/nextjs-app/**'
+      - 'docker/dashboard/**'
+      - '.github/workflows/deploy-dashboard.yml'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'ECR image tag (default: git SHA + latest)'
+        required: false
+        default: ''
+      skip_deploy:
+        description: 'Skip ECS deploy (build only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPO: cc-on-bedrock/dashboard
+  ECS_CLUSTER: cc-on-bedrock-devenv
+  ECS_SERVICE: CcOnBedrock-Dashboard-DashboardSvcService607C5919-6YUFqXVEqA77
+
+jobs:
+  build-and-push:
+    name: Build → Push to ECR
+    runs-on: cc-bedrock-arm
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          RUN_NUMBER: ${{ github.run_number }}
+          GIT_SHA_SHORT: ${{ github.sha }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="build-${RUN_NUMBER}-${GIT_SHA_SHORT:0:7}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $TAG"
+
+      - name: Build and push
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          IMAGE="$ECR_REGISTRY/$ECR_REPO"
+
+          docker build --platform linux/arm64 \
+            -t "$IMAGE:$IMAGE_TAG" \
+            -t "$IMAGE:latest" \
+            -f docker/dashboard/Dockerfile .
+
+          docker push "$IMAGE:$IMAGE_TAG"
+          docker push "$IMAGE:latest"
+
+  deploy:
+    name: Deploy to ECS
+    needs: build-and-push
+    if: ${{ !inputs.skip_deploy }}
+    runs-on: cc-bedrock-arm
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install AWS CLI
+        run: |
+          if ! command -v aws &>/dev/null; then
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+            cd /tmp && unzip -qo awscliv2.zip && sudo ./aws/install --update
+          fi
+          aws --version
+
+      - name: Update task definition with new image
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          FULL_IMAGE="$ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG"
+          echo "Deploying image: $FULL_IMAGE"
+
+          # Get current task def, update image, register new revision
+          TASK_DEF=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          TASK_FAMILY=$(echo "$TASK_DEF" | awk -F/ '{print $NF}' | awk -F: '{print $1}')
+
+          aws ecs describe-task-definition --task-definition "$TASK_DEF" \
+            --query 'taskDefinition' | \
+            jq --arg IMG "$FULL_IMAGE" \
+              '.containerDefinitions[0].image = $IMG |
+               del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                   .compatibilities, .registeredAt, .registeredBy)' \
+            > /tmp/new-taskdef.json
+
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/new-taskdef.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "New task definition: $NEW_TASK_DEF"
+
+          # Update service with new task definition
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK_DEF" \
+            --query 'service.deployments[0].{status:status,running:runningCount,desired:desiredCount}' \
+            --output table
+
+      - name: Wait for service stability
+        run: |
+          echo "Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+          echo "Service is stable."
+
+      - name: Verify deployment
+        run: |
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].{
+              status:status,
+              desired:desiredCount,
+              running:runningCount,
+              deployments:deployments[*].{status:status,running:runningCount,desired:desiredCount,rollout:rolloutState}
+            }' \
+            --output table

@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { getCognitoUser } from "@/lib/aws-clients";
 import {
-  startContainer,
-  stopContainer,
-  listContainers,
-  registerContainerRoute,
-  describeContainer,
-  deregisterContainerRoute,
-} from "@/lib/aws-clients";
+  startInstance,
+  stopInstance,
+  listInstances,
+} from "@/lib/ec2-clients";
 import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
@@ -38,8 +36,66 @@ async function getDeptAllowedTiers(department: string): Promise<ResourceTier[]> 
   } catch (err) {
     console.warn("[user/container] Failed to fetch dept policy:", err);
   }
-  // Default: allow all tiers
   return ["light", "standard", "power"];
+}
+
+export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+  const user = session.user;
+  const action = req.nextUrl.searchParams.get("action");
+
+  if (action === "dept-policy") {
+    const department = ((user as unknown as Record<string, string>).department) ?? "";
+    const allowedTiers = department ? await getDeptAllowedTiers(department) : ["light", "standard", "power"];
+    return NextResponse.json({ success: true, data: { allowedTiers } });
+  }
+
+  if (action === "verify") {
+    try {
+      const cognitoUser = await getCognitoUser(user.email);
+      return NextResponse.json({
+        success: true,
+        data: { subdomain: cognitoUser.subdomain || null },
+      });
+    } catch {
+      return NextResponse.json({ success: true, data: { subdomain: null } });
+    }
+  }
+
+  if (!user.subdomain) {
+    return NextResponse.json({ success: true, data: null });
+  }
+
+  try {
+    const instances = await listInstances();
+    const userInstance = instances.find(
+      (i) => i.subdomain === user.subdomain && (i.status === "running" || i.status === "pending" || i.status === "hibernated")
+    );
+    if (userInstance) {
+      // ADR-010: Map hibernated DynamoDB status to HIBERNATED API status
+      const apiStatus = userInstance.status === "hibernated" ? "HIBERNATED" : userInstance.status.toUpperCase();
+      return NextResponse.json({ success: true, data: {
+        taskArn: userInstance.instanceId,
+        taskId: userInstance.instanceId,
+        status: apiStatus,
+        desiredStatus: apiStatus,
+        username: userInstance.username,
+        subdomain: userInstance.subdomain,
+        containerOs: "ubuntu",
+        resourceTier: userInstance.instanceType ?? "standard",
+        securityPolicy: userInstance.securityPolicy,
+        privateIp: userInstance.privateIp,
+        healthStatus: userInstance.status === "running" ? "HEALTHY" : "UNKNOWN",
+      }});
+    }
+    return NextResponse.json({ success: true, data: null });
+  } catch (err) {
+    console.error("[user/container GET]", err);
+    return NextResponse.json({ error: "Failed to fetch instance" }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -55,98 +111,35 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { action, taskArn, resourceTier: requestedTier } = body;
+    const { action, resourceTier: requestedTier } = body;
 
     if (action === "start") {
-      // Check if user already has a running container
-      const containers = await listContainers();
-      const existingContainer = containers.find(
-        (c) =>
-          c.subdomain === user.subdomain &&
-          (c.status === "RUNNING" || c.status === "PENDING" || c.status === "PROVISIONING")
-      );
-
-      if (existingContainer) {
-        return NextResponse.json(
-          { success: false, error: "You already have a running container" },
-          { status: 409 }
-        );
-      }
-
-      // Determine the tier to use: requested > user default > standard
       const tierToUse: ResourceTier = VALID_TIERS.includes(requestedTier)
         ? requestedTier
         : (user.resourceTier as ResourceTier) ?? "standard";
 
-      // Validate tier against department policy
-      const department = "default"; // Could be extended to read from user attributes
+      const department = ((user as unknown as Record<string, string>).department) ?? "default";
       const allowedTiers = await getDeptAllowedTiers(department);
 
       if (!allowedTiers.includes(tierToUse)) {
         return NextResponse.json(
-          {
-            success: false,
-            error: `Tier "${tierToUse}" is not allowed for your department. Allowed: ${allowedTiers.join(", ")}`,
-          },
+          { success: false, error: `Tier "${tierToUse}" is not allowed for your department. Allowed: ${allowedTiers.join(", ")}` },
           { status: 403 }
         );
       }
 
-      const newTaskArn = await startContainer({
-        username: user.email,
+      const result = await startInstance({
         subdomain: user.subdomain,
+        username: user.email,
         department,
-        containerOs: user.containerOs ?? "ubuntu",
+        securityPolicy: (user.securityPolicy ?? "restricted") as "open" | "restricted" | "locked",
         resourceTier: tierToUse,
-        securityPolicy: user.securityPolicy ?? "restricted",
-        storageType: user.storageType ?? "efs",
       });
-
-      // Auto-register route after a short delay for IP assignment
-      setTimeout(async () => {
-        try {
-          for (let i = 0; i < 6; i++) {
-            await new Promise((r) => setTimeout(r, 5000));
-            const info = await describeContainer(newTaskArn);
-            if (info?.privateIp) {
-              await registerContainerRoute(user.subdomain!, info.privateIp);
-              break;
-            }
-          }
-        } catch (err) {
-          console.error("[user/container] Route register failed:", err);
-        }
-      }, 2000);
-
-      return NextResponse.json({ success: true, data: { taskArn: newTaskArn } });
+      return NextResponse.json({ success: true, data: { taskArn: result.instanceId } });
     }
 
     if (action === "stop") {
-      if (!taskArn) {
-        return NextResponse.json({ error: "taskArn required for stop action" }, { status: 400 });
-      }
-
-      // Verify this container belongs to the user
-      const containers = await listContainers();
-      const userContainer = containers.find(
-        (c) => c.taskArn === taskArn && c.subdomain === user.subdomain
-      );
-
-      if (!userContainer) {
-        return NextResponse.json(
-          { success: false, error: "Container not found or not owned by you" },
-          { status: 403 }
-        );
-      }
-
-      // Deregister route before stopping
-      try {
-        await deregisterContainerRoute(user.subdomain);
-      } catch (err) {
-        console.warn("[user/container] Route deregister:", err);
-      }
-
-      await stopContainer({ taskArn, reason: "Stopped by user" });
+      await stopInstance(user.subdomain, "Stopped by user");
       return NextResponse.json({ success: true });
     }
 

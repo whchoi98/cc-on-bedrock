@@ -1,6 +1,6 @@
 """
 Create CC-on-Bedrock Gateway + Lambda Targets
-Usage: ACCOUNT_ID=061525506239 python3 agent/lambda/create_targets.py
+Usage: ACCOUNT_ID=<your-account-id> python3 agent/lambda/create_targets.py
 
 1. Creates 3 Lambda functions (cc-ecs-mcp, cc-cloudwatch-mcp, cc-dynamodb-mcp)
 2. Creates Gateway (cconbedrock-gateway)
